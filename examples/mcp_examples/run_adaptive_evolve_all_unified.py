@@ -56,7 +56,6 @@ from agent_evolve.algorithms.unified.operators.llm_bash_evolve import _resolve_l
 from agent_evolve.benchmarks.mcp_atlas import McpAtlasBenchmark
 from agent_evolve.config import EvolveConfig
 from agent_evolve.engine.loop import EvolutionLoop
-from agent_evolve.llm.bedrock import BedrockProvider
 from examples.mcp_examples.adaptive_evolve_all import CodeExecMcpAgent
 
 logger = logging.getLogger(__name__)

@@ -1,7 +1,7 @@
 """Standalone ReAct solver for Terminal-Bench 2.0.
 
-Implements the same ReAct loop as inspect_ai's react() solver, using
-AWS Bedrock Converse API directly — no strands dependency.
+Implements the same ReAct loop as inspect_ai's react() solver.  It supports
+AWS Bedrock Converse and OpenAI-compatible providers such as OpenRouter.
 
 The loop:
   1. Send messages + tool definitions to the LLM
@@ -282,8 +282,8 @@ def react_solve(
     Args:
         task_prompt: The task description (user message).
         container_name: Docker container name for tool execution.
-        model_id: Bedrock model ID.
-        region: AWS region.
+        model_id: Bedrock model ID, or OpenAI/OpenRouter-compatible model ID.
+        region: AWS region for Bedrock.
         max_tokens: Max tokens per LLM call.
         timeout_sec: Wall-clock timeout for the entire solve.
         max_turns: Safety limit on LLM calls.
@@ -294,10 +294,28 @@ def react_solve(
     Returns:
         ReactSolverResult with messages, submission status, and usage.
     """
-    import boto3
-
     if log is None:
         log = logger
+
+    from ...llm.factory import is_openai_compatible_model
+
+    if is_openai_compatible_model(model_id):
+        return _react_solve_openai(
+            task_prompt=task_prompt,
+            container_name=container_name,
+            model_id=model_id,
+            max_tokens=max_tokens,
+            timeout_sec=timeout_sec,
+            max_turns=max_turns,
+            log=log,
+            system_prompt=system_prompt,
+            propose_skill=propose_skill,
+            skills=skills,
+            tool_specs=tool_specs,
+            tool_executors=tool_executors,
+        )
+
+    import boto3
 
     from botocore.config import Config as BotoConfig
     client = boto3.client(
@@ -518,6 +536,185 @@ def react_solve(
     return result
 
 
+def _react_solve_openai(
+    task_prompt: str,
+    container_name: str,
+    model_id: str,
+    max_tokens: int,
+    timeout_sec: int,
+    max_turns: int,
+    log: logging.Logger,
+    system_prompt: str | None = None,
+    propose_skill: bool = False,
+    skills: dict[str, str] | None = None,
+    tool_specs: list[dict] | None = None,
+    tool_executors: dict[str, callable] | None = None,
+) -> ReactSolverResult:
+    """OpenAI/OpenRouter-compatible ReAct loop for Terminal-Bench."""
+    from ...llm.factory import create_openai_client_for_model
+
+    client, selected_model, provider = create_openai_client_for_model(model_id)
+    result = ReactSolverResult()
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
+        {"role": "user", "content": task_prompt},
+    ]
+    result.messages = messages
+
+    base_specs = tool_specs if tool_specs is not None else TOOL_SPECS
+    all_specs = base_specs + ([READ_SKILL_SPEC] if skills else [])
+    openai_tools = _to_openai_tools(all_specs)
+
+    t0 = time.time()
+    consecutive_errors = 0
+    retry_lost_time = 0.0
+
+    for turn in range(max_turns):
+        effective_elapsed = time.time() - t0 - retry_lost_time
+        if effective_elapsed >= timeout_sec:
+            log.warning("Timeout reached before LLM call (%.0fs effective >= %ds)", effective_elapsed, timeout_sec)
+            result.timed_out = True
+            break
+
+        log.debug("[turn %d] Calling %s LLM (%.0fs elapsed, %.0fs effective)...",
+                  turn + 1, provider, time.time() - t0, effective_elapsed)
+        call_start = time.time()
+        try:
+            params: dict[str, Any] = {
+                "model": selected_model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+            }
+            if openai_tools:
+                params["tools"] = openai_tools
+                params["tool_choice"] = "auto"
+            response = client.chat.completions.create(**params)
+            consecutive_errors = 0
+        except Exception as e:
+            err_str = str(e)
+            if any(kw in err_str.lower() for kw in [
+                "rate limit", "timeout", "temporarily unavailable", "503", "502",
+                "too many requests", "throttl", "connection",
+            ]):
+                consecutive_errors += 1
+                wait = min(120, 15 * consecutive_errors)
+                retry_lost_time += time.time() - call_start + wait
+                wall_elapsed = time.time() - t0 + wait
+                if consecutive_errors >= 5 or wall_elapsed >= timeout_sec * 2.5:
+                    log.error("Giving up after %d retries (%.0fs wall, %.0fs paused): %s",
+                              consecutive_errors, wall_elapsed, retry_lost_time, err_str[:200])
+                    break
+                log.warning("Transient API error (%d/5): %s. Retrying in %ds...",
+                            consecutive_errors, err_str[:150], wait)
+                time.sleep(wait)
+                continue
+            log.error("LLM error: %s", err_str[:300])
+            break
+
+        effective_elapsed = time.time() - t0 - retry_lost_time
+        if effective_elapsed >= timeout_sec:
+            log.warning("Timeout reached after LLM call (%.0fs effective >= %ds)", effective_elapsed, timeout_sec)
+            result.timed_out = True
+            break
+
+        usage = getattr(response, "usage", None)
+        result.total_input_tokens += _usage_value(usage, "prompt_tokens")
+        result.total_output_tokens += _usage_value(usage, "completion_tokens")
+
+        message = response.choices[0].message
+        content = getattr(message, "content", None) or ""
+        tool_calls = list(getattr(message, "tool_calls", None) or [])
+        assistant_message: dict[str, Any] = {"role": "assistant", "content": content}
+        if tool_calls:
+            assistant_message["tool_calls"] = [
+                _openai_tool_call_to_dict(call) for call in tool_calls
+            ]
+        messages.append(assistant_message)
+
+        if content:
+            log.debug("[turn %d] Assistant text: %s", turn + 1, content[:200])
+
+        if tool_calls:
+            submitted = False
+            for call in tool_calls:
+                if time.time() - t0 - retry_lost_time >= timeout_sec:
+                    log.warning("Timeout reached during tool execution")
+                    result.timed_out = True
+                    break
+
+                tool_name = call.function.name
+                raw_args = call.function.arguments or "{}"
+                try:
+                    tool_input = json.loads(raw_args)
+                    if not isinstance(tool_input, dict):
+                        tool_input = {"value": tool_input}
+                except json.JSONDecodeError:
+                    tool_input = {}
+                result.tool_call_count += 1
+
+                if tool_name == "read_skill":
+                    skill_name = tool_input.get("name", "")
+                    if skills and skill_name in skills:
+                        tool_output = skills[skill_name]
+                        log.info("[read_skill] %s (%d chars)", skill_name, len(tool_output))
+                    else:
+                        available = ", ".join(skills.keys()) if skills else "none"
+                        tool_output = f"Skill '{skill_name}' not found. Available: {available}"
+                        log.warning("[read_skill] not found: %s", skill_name)
+                elif tool_executors and tool_name in tool_executors:
+                    tool_output = tool_executors[tool_name](container_name, tool_input, log)
+                elif tool_name == "bash":
+                    tool_output = _exec_bash(container_name, tool_input.get("cmd", ""), log)
+                elif tool_name == "python":
+                    tool_output = _exec_python(container_name, tool_input.get("code", ""), log)
+                elif tool_name == "submit":
+                    tool_output = _exec_submit(tool_input.get("answer", ""), log)
+                else:
+                    tool_output = f"ERROR: Unknown tool '{tool_name}'"
+                    log.warning("Unknown tool: %s", tool_name)
+
+                if tool_name == "submit":
+                    submitted = True
+                    result.submitted = True
+                    result.submit_answer = tool_input.get("answer", "")
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "name": tool_name,
+                    "content": str(tool_output),
+                })
+
+            if submitted:
+                log.info("Agent submitted after %d turns, %.0fs", turn + 1, time.time() - t0)
+                break
+            if result.timed_out:
+                break
+        else:
+            if time.time() - t0 - retry_lost_time >= timeout_sec:
+                log.warning("Timeout reached, not sending continue prompt")
+                result.timed_out = True
+                break
+            log.info("[turn %d] No tool calls - sending continue prompt", turn + 1)
+            messages.append({"role": "user", "content": CONTINUE_PROMPT})
+
+    elapsed = time.time() - t0
+    log.info(
+        "ReAct loop done: %d turns, %d tool calls, %.0fs, "
+        "tokens=%d in + %d out, submitted=%s",
+        turn + 1, result.tool_call_count, elapsed,
+        result.total_input_tokens, result.total_output_tokens,
+        result.submitted,
+    )
+
+    result.messages = messages
+    if propose_skill:
+        result.skill_draft = _reflect_for_skill_openai(
+            client, selected_model, messages, openai_tools, max_tokens, log
+        )
+    return result
+
+
 # ── Skill reflection (v15) ──────────────────────────────────────────
 
 def _reflect_for_skill(
@@ -577,14 +774,131 @@ def _reflect_for_skill(
         return None
 
 
+def _reflect_for_skill_openai(
+    client: Any,
+    model_id: str,
+    messages: list[dict],
+    tools: list[dict],
+    max_tokens: int,
+    log: logging.Logger,
+) -> str | None:
+    """OpenAI-compatible skill reflection."""
+    reflect_messages = messages + [
+        {"role": "user", "content": SKILL_REFLECTION_PROMPT}
+    ]
+    try:
+        log.info("[reflection] Asking solver to propose a skill draft...")
+        params: dict[str, Any] = {
+            "model": model_id,
+            "messages": reflect_messages,
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            params["tools"] = tools
+        response = client.chat.completions.create(**params)
+        text = response.choices[0].message.content or ""
+
+        if not text or "NO_SKILL_NEEDED" in text:
+            log.info("[reflection] Solver declined: no skill needed")
+            return None
+
+        if "---\nname:" in text:
+            start = text.index("---\nname:")
+            draft = text[start:]
+            if "```" in draft:
+                draft = draft[:draft.rindex("```")]
+            log.info("[reflection] Got skill draft (%d chars)", len(draft))
+            return draft.strip()
+
+        log.info("[reflection] Response didn't contain a valid skill draft")
+        return None
+
+    except Exception as e:
+        log.warning("[reflection] Skill reflection failed: %s", str(e)[:200])
+        return None
+
+
+def _to_openai_tools(tools: list[dict]) -> list[dict]:
+    """Convert Bedrock Converse tool specs to OpenAI function tools."""
+    converted: list[dict] = []
+    for spec in tools:
+        if spec.get("type") == "function":
+            converted.append(spec)
+            continue
+        tool_spec = spec.get("toolSpec", spec)
+        schema = tool_spec.get("inputSchema", {}).get("json")
+        if schema is None:
+            schema = tool_spec.get("input_schema", {"type": "object"})
+        converted.append({
+            "type": "function",
+            "function": {
+                "name": tool_spec.get("name", ""),
+                "description": tool_spec.get("description", ""),
+                "parameters": schema,
+            },
+        })
+    return converted
+
+
+def _openai_tool_call_to_dict(tool_call: Any) -> dict[str, Any]:
+    return {
+        "id": tool_call.id,
+        "type": "function",
+        "function": {
+            "name": tool_call.function.name,
+            "arguments": tool_call.function.arguments or "{}",
+        },
+    }
+
+
+def _usage_value(usage: Any, key: str) -> int:
+    if usage is None:
+        return 0
+    if isinstance(usage, dict):
+        return int(usage.get(key, 0) or 0)
+    return int(getattr(usage, key, 0) or 0)
+
+
 # ── Conversation extraction ─────────────────────────────────────────
 
 def extract_conversation(messages: list[dict]) -> list[dict]:
-    """Convert Bedrock Converse messages to standard assistant/tool format."""
+    """Convert Bedrock/OpenAI messages to standard assistant/tool format."""
     conv = []
     for msg in messages:
         role = msg.get("role", "unknown")
         content_blocks = msg.get("content", [])
+
+        if isinstance(content_blocks, str):
+            if role == "assistant" and msg.get("tool_calls"):
+                entry: dict = {
+                    "role": "assistant",
+                    "content": content_blocks,
+                    "tool_calls": [],
+                }
+                for tc in msg.get("tool_calls", []):
+                    raw_args = tc.get("function", {}).get("arguments", "{}")
+                    try:
+                        args = json.loads(raw_args)
+                    except Exception:
+                        args = raw_args
+                    entry["tool_calls"].append({
+                        "id": tc.get("id", ""),
+                        "function": tc.get("function", {}).get("name", ""),
+                        "arguments": args,
+                        "type": "function",
+                    })
+                conv.append(entry)
+            elif role == "tool":
+                conv.append({
+                    "role": "tool",
+                    "tool_call_id": msg.get("tool_call_id", ""),
+                    "function": msg.get("name", ""),
+                    "content": content_blocks[:3000]
+                    + ("\n...[truncated]" if len(content_blocks) > 3000 else ""),
+                })
+            elif content_blocks:
+                conv.append({"role": role, "content": content_blocks})
+            continue
 
         text_parts = []
         tool_uses = []

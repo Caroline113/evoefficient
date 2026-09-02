@@ -53,6 +53,7 @@ inspect_evals/
 !/docs/algorithms/
 !/tests/
 /tests/*
+!/tests/test_efficiency_routing.py
 !/tests/test_skillbench_setup.py
 !/tests/gepa/
 

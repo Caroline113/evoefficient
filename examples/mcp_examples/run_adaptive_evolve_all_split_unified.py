@@ -53,7 +53,7 @@ from agent_evolve.algorithms.unified import UnifiedEngine
 from agent_evolve.benchmarks.mcp_atlas import McpAtlasBenchmark
 from agent_evolve.config import EvolveConfig
 from agent_evolve.engine.loop import EvolutionLoop
-from agent_evolve.llm.bedrock import BedrockProvider
+from agent_evolve.llm.factory import create_llm_provider
 from examples.mcp_examples.adaptive_evolve_all import CodeExecMcpAgent
 
 logger = logging.getLogger(__name__)
@@ -244,7 +244,7 @@ def main() -> int:
 
     # LLM provider for evolver operators.
     evolver_model = args.evolver_model or args.solver_model
-    llm = BedrockProvider(model_id=evolver_model, region=args.region)
+    llm = create_llm_provider(evolver_model, region=args.region)
 
     # ── Phase 1: TRAIN ──
     # Exact integer division; we asserted divisibility above.

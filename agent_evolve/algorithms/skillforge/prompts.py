@@ -222,13 +222,13 @@ def judge_trajectories(
     Each verdict has: score (0-10), category, outcome, failure_reason.
     """
     try:
-        from ...llm.bedrock import BedrockProvider
         from ...llm.base import LLMMessage
+        from ...llm.factory import create_llm_provider
     except ImportError:
-        logger.warning("BedrockProvider not available, skipping judge")
+        logger.warning("LLM provider not available, skipping judge")
         return [{"score": -1, "category": "unknown", "outcome": "judge unavailable", "failure_reason": ""} for _ in logs]
 
-    llm = BedrockProvider(model_id=model_id, region=region)
+    llm = create_llm_provider(model_id, region=region)
     verdicts = []
 
     for log in logs:

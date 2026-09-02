@@ -90,6 +90,23 @@ def _make_workspace_bash(workspace_root: str | Path):
 
 
 def _resolve_llm(model: str, region: str):
+    from agent_evolve.llm.factory import (
+        create_llm_provider,
+        resolve_model_selection,
+        split_provider_prefix,
+    )
+
+    prefixed_provider, _ = split_provider_prefix(model)
+    env_provider = (
+        os.environ.get("AEVOLVE_MODEL_PROVIDER")
+        or os.environ.get("AGENT_EVOLVE_MODEL_PROVIDER")
+        or os.environ.get("MODEL_PROVIDER")
+        or os.environ.get("LLM_PROVIDER")
+    )
+    if prefixed_provider or env_provider:
+        provider_name, _model = resolve_model_selection(model)
+        return create_llm_provider(model, region=region), provider_name
+
     if (
         model.startswith("openai:")
         or model.startswith("/")

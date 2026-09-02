@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -50,11 +51,13 @@ class EvolutionLoop:
         benchmark: BenchmarkAdapter,
         engine: EvolutionEngine,
         config: EvolveConfig | None = None,
+        task_observer: Callable[[Observation, int], None] | None = None,
     ):
         self.agent = agent
         self.benchmark = benchmark
         self.engine = engine
         self.config = config or EvolveConfig()
+        self.task_observer = task_observer
 
         workspace_root = self.agent.workspace.root
         evolution_dir = workspace_root / "evolution"
@@ -65,17 +68,31 @@ class EvolutionLoop:
         self.history = EvolutionHistory(self.observer, self.versioning)
         self.trial = TrialRunner(self.agent, self.benchmark)
 
-    def run(self, cycles: int | None = None) -> EvolutionResult:
+    def run(
+        self,
+        cycles: int | None = None,
+        start_cycle: int = 1,
+        existing_score_history: list[float] | None = None,
+    ) -> EvolutionResult:
         """Run the evolution loop for the specified number of cycles."""
         max_cycles = cycles or self.config.max_cycles
+        start_cycle = max(1, int(start_cycle))
         evolution_dir = self.agent.workspace.root / "evolution"
 
         self.versioning.init()
 
-        score_history: list[float] = []
+        score_history: list[float] = list(existing_score_history or [])
 
-        for cycle in range(max_cycles):
-            cycle_num = cycle + 1
+        if start_cycle > max_cycles:
+            final_score = score_history[-1] if score_history else 0.0
+            return EvolutionResult(
+                cycles_completed=len(score_history),
+                final_score=final_score,
+                score_history=score_history,
+                converged=False,
+            )
+
+        for cycle_num in range(start_cycle, max_cycles + 1):
             logger.info("=== Evolution Cycle %d/%d ===", cycle_num, max_cycles)
 
             # 1. SOLVE + 2. OBSERVE
@@ -92,7 +109,9 @@ class EvolutionLoop:
                     try:
                         trajectory = self.agent.solve(task)
                         feedback = self.benchmark.evaluate(task, trajectory)
-                        observations.append(Observation(task=task, trajectory=trajectory, feedback=feedback))
+                        observation = Observation(task=task, trajectory=trajectory, feedback=feedback)
+                        observations.append(observation)
+                        self._notify_task_observer(observation, cycle_num)
                     except Exception as e:
                         logger.error("Error solving task %s: %s", task.id, e)
 
@@ -206,3 +225,15 @@ class EvolutionLoop:
             "avg_score": sum(scores) / len(scores) if scores else 0.0,
         }
         metrics_file.write_text(json.dumps(metrics, indent=2))
+
+    def _notify_task_observer(self, observation: Observation, cycle_num: int) -> None:
+        if self.task_observer is None:
+            return
+        try:
+            self.task_observer(observation, cycle_num)
+        except Exception as exc:  # noqa: BLE001
+            task_id = getattr(getattr(observation, "task", None), "id", "?")
+            logger.warning(
+                "task_observer failed for task %s in cycle %d: %s",
+                task_id, cycle_num, exc,
+            )

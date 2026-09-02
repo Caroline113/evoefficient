@@ -15,8 +15,8 @@ import os
 from pathlib import Path
 
 from strands import Agent
-from strands.models import BedrockModel
 
+from ...llm.factory import create_strands_model
 from ...protocol.base_agent import BaseAgent
 from ...types import Task, Trajectory
 from .docker_env import TB2Container, pull_image
@@ -52,9 +52,9 @@ class TerminalAgent(BaseAgent):
 
     def _build_strands_agent(self) -> Agent:
         """Create a strands Agent wired with the workspace's current state."""
-        model = BedrockModel(
+        model = create_strands_model(
             model_id=self.model_id,
-            region_name=self.region,
+            region=self.region,
             max_tokens=self.max_tokens,
         )
 

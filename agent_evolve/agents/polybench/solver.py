@@ -149,6 +149,7 @@ def solve_one(task_dict: dict, args_dict: dict) -> dict:
     from strands.hooks.events import AfterModelCallEvent, BeforeToolCallEvent
     from strands.types.exceptions import ModelThrottledException
     from agent_evolve.benchmarks.polybench import PolyBenchBenchmark
+    from agent_evolve.llm.factory import create_strands_model
     from agent_evolve.types import Task, Trajectory
     import boto3
 
@@ -366,9 +367,9 @@ def solve_one(task_dict: dict, args_dict: dict) -> dict:
                 log.warning("Sandbox start failed (tools unavailable): %s", e)
 
         from botocore.config import Config as BotocoreConfig
-        model = BedrockModel(
+        model = create_strands_model(
             model_id=args_dict["model_id"],
-            region_name=args_dict["region"],
+            region=args_dict["region"],
             max_tokens=args_dict["max_tokens"],
             temperature=args_dict.get("solver_temperature", 0.0),
             boto_client_config=BotocoreConfig(

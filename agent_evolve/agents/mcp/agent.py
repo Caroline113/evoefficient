@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from strands import Agent
-from strands.models import BedrockModel
 
+from ...llm.factory import create_strands_model
 from ...protocol.base_agent import BaseAgent
 from ...types import Task, Trajectory
 from .docker_env import McpAtlasContainer, pull_image
@@ -145,15 +145,15 @@ class McpAgent(BaseAgent):
         return selected
 
     def _build_strands_agent(self, tools: list, task_prompt: str | None = None) -> Agent:
-        """Create a strands Agent with BedrockModel and the given tools.
+        """Create a strands Agent with the selected model provider and tools.
 
         Args:
             tools: List of tool wrappers
             task_prompt: Optional task input for skill selection
         """
-        model = BedrockModel(
+        model = create_strands_model(
             model_id=self.model_id,
-            region_name=self.region,
+            region=self.region,
             max_tokens=self.max_tokens,
         )
         system_prompt = self._build_system_prompt(task_prompt=task_prompt)

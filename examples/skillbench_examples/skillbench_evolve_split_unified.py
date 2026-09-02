@@ -78,7 +78,7 @@ from agent_evolve.benchmarks.skill_bench import SkillBenchBenchmark
 from agent_evolve.config import EvolveConfig
 from agent_evolve.algorithms.unified import UnifiedEngine
 from agent_evolve.engine.observer import Observer
-from agent_evolve.llm.bedrock import BedrockProvider
+from agent_evolve.llm.factory import create_llm_provider
 from agent_evolve.types import Feedback, Observation, Task, Trajectory
 
 _write_lock = threading.Lock()
@@ -638,7 +638,7 @@ def _distill_bloated_skills(
 
     Returns the number of skills distilled.
     """
-    from agent_evolve.llm.bedrock import BedrockProvider
+    from agent_evolve.llm.factory import create_llm_provider
 
     skills_dir = workspace_root / "skills"
     if not skills_dir.is_dir():
@@ -673,7 +673,7 @@ def _distill_bloated_skills(
                 name, len(lines), size, max_lines,
             )
 
-        provider = BedrockProvider(model_id=model_id, region=region)
+        provider = create_llm_provider(model_id, region=region)
         from agent_evolve.llm.base import LLMMessage
         messages = [
             LLMMessage(role="user", content=DISTILL_PROMPT.format(
@@ -719,7 +719,7 @@ def _generate_task_skill(
     Writes to workspace/task_skills/<task_id>/SKILL.md.
     Returns True if skill was generated.
     """
-    from agent_evolve.llm.bedrock import BedrockProvider
+    from agent_evolve.llm.factory import create_llm_provider
     from agent_evolve.llm.base import LLMMessage
 
     skill_path = _task_skill_path(workspace_root, task_id)
@@ -731,7 +731,7 @@ def _generate_task_skill(
     task_skills_dir = skill_path.parent
     task_skills_dir.mkdir(parents=True, exist_ok=True)
 
-    provider = BedrockProvider(model_id=model_id, region=region)
+    provider = create_llm_provider(model_id, region=region)
     messages = [
         LLMMessage(role="user", content=TASK_SKILL_PROMPT.format(
             task_id=task_id,
@@ -802,10 +802,10 @@ def _distill_success_to_draft(
 
     Writes to skills/_drafts/<support_key>.md. Returns metadata dict or None.
     """
-    from agent_evolve.llm.bedrock import BedrockProvider
+    from agent_evolve.llm.factory import create_llm_provider
     from agent_evolve.llm.base import LLMMessage
 
-    provider = BedrockProvider(model_id=model_id, region=region)
+    provider = create_llm_provider(model_id, region=region)
     messages = [
         LLMMessage(role="user", content=SUCCESS_DISTILL_PROMPT.format(
             task_id=task_id,

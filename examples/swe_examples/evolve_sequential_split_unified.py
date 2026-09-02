@@ -45,7 +45,7 @@ from agent_evolve.algorithms.unified import UnifiedEngine
 from agent_evolve.benchmarks.swe_verified_mini.benchmark import SweVerifiedMiniBenchmark
 from agent_evolve.config import EvolveConfig
 from agent_evolve.engine.loop import EvolutionLoop
-from agent_evolve.llm.bedrock import BedrockProvider
+from agent_evolve.llm.factory import create_llm_provider
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +201,7 @@ def main() -> int:
     )
 
     evolver_model_id = args.evolver_model_id or args.model_id
-    llm = BedrockProvider(model_id=evolver_model_id, region=args.region)
+    llm = create_llm_provider(evolver_model_id, region=args.region)
 
     # ── Phase 1: TRAIN (evolve on first evolve-limit tasks) ──
     # Exact integer division; we asserted divisibility above.

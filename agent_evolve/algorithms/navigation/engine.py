@@ -172,8 +172,7 @@ class NavigationEngine(AEvolveEngine):
         branch_summaries = self._read_branch_leaves(tree, workspace_root, viable)
         prompt = build_navigate_prompt(task_description, branch_summaries)
         try:
-            from ...llm.bedrock import BedrockProvider
-            if isinstance(self.llm, BedrockProvider):
+            if hasattr(self.llm, "converse_loop"):
                 response = self.llm.converse_loop(
                     system_prompt=NAVIGATE_SYSTEM_PROMPT,
                     user_message=prompt,

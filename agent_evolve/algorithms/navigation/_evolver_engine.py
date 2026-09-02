@@ -286,24 +286,20 @@ class AEvolveEngine(EvolutionEngine):
             )
 
         with sandbox:
-            try:
-                from ...llm.bedrock import BedrockProvider
-
-                if isinstance(self.llm, BedrockProvider):
-                    response = self.llm.converse_loop(
-                        system_prompt=sys_prompt,
-                        user_message=prompt,
-                        tools=tools,
-                        tool_executor=executors,
-                        max_tokens=self.config.evolver_max_tokens,
-                    )
-                    return {
-                        "content": response.content,
-                        "usage": response.usage,
-                        "conversation": response.raw.get("conversation", []),
-                    }
-            except ImportError:
-                pass
+            if hasattr(self.llm, "converse_loop"):
+                response = self.llm.converse_loop(
+                    system_prompt=sys_prompt,
+                    user_message=prompt,
+                    tools=tools,
+                    tool_executor=executors,
+                    max_tokens=self.config.evolver_max_tokens,
+                )
+                raw = response.raw if isinstance(response.raw, dict) else {}
+                return {
+                    "content": response.content,
+                    "usage": response.usage,
+                    "conversation": raw.get("conversation", []),
+                }
 
             fallback_sys = self.config.extra.get("evolver_system_prompt") or DEFAULT_EVOLVER_SYSTEM_PROMPT
             messages = [

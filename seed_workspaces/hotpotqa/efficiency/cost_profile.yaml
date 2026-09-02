@@ -1,0 +1,3 @@
+preferred_mode: balanced
+token_budget: 1
+step_budget: 1

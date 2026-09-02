@@ -314,8 +314,8 @@ class SkillCurator:
                 )
         else:
             try:
-                from agent_evolve.llm.bedrock import BedrockProvider
                 from agent_evolve.llm.base import LLMMessage
+                from agent_evolve.llm.factory import create_llm_provider
             except ImportError as e:
                 logger.warning("SkillCurator: LLM provider unavailable (%s)", e)
                 return MutationReport(
@@ -323,8 +323,8 @@ class SkillCurator:
                     count=0,
                     details={"error": f"provider unavailable: {e}"},
                 )
-            llm = BedrockProvider(
-                model_id=state.get("model_id", self.DEFAULT_MODEL),
+            llm = create_llm_provider(
+                state.get("model_id", self.DEFAULT_MODEL),
                 region=state.get("region", self.DEFAULT_REGION),
             )
             prompt = (

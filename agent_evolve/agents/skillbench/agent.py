@@ -15,13 +15,12 @@ from typing import Any
 
 try:
     from strands import Agent
-    from strands.models import BedrockModel
     _STRANDS_IMPORT_ERROR: Exception | None = None
 except Exception as exc:  # pragma: no cover - optional runtime dependency
     Agent = Any  # type: ignore[assignment]
-    BedrockModel = None  # type: ignore[assignment]
     _STRANDS_IMPORT_ERROR = exc
 
+from ...llm.factory import create_strands_model
 from ...protocol.base_agent import BaseAgent
 from ...types import Task, Trajectory
 from .repo import resolve_skillbench_paths
@@ -148,14 +147,14 @@ class SkillBenchAgent(BaseAgent):
         return "\n".join(parts)
 
     def _build_strands_agent(self, tools: list) -> Agent:
-        """Create a strands Agent with BedrockModel and container tools."""
-        if BedrockModel is None:
+        """Create a strands Agent with the selected model provider and tools."""
+        if _STRANDS_IMPORT_ERROR is not None:
             raise ModuleNotFoundError(
                 "SkillBenchAgent requires optional dependency 'strands-agents' for native execution."
             ) from _STRANDS_IMPORT_ERROR
-        model = BedrockModel(
+        model = create_strands_model(
             model_id=self.model_id,
-            region_name=self.region,
+            region=self.region,
             max_tokens=self.max_tokens,
         )
         return Agent(

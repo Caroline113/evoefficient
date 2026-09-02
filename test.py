@@ -1,0 +1,3 @@
+import strands                                                                                                                                                                                                 
+from agent_evolve.benchmarks.mcp_atlas import McpAtlasBenchmark                                                                                                                                                
+print("MCP env OK")                                                                                                                                                                                            

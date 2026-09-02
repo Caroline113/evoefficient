@@ -6,6 +6,31 @@ from typing import Any
 
 from .base import LLMMessage, LLMProvider, LLMResponse
 
+def _usage_dict(usage: Any) -> dict[str, int]:
+    if usage is None:
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+        }
+    prompt_details = getattr(usage, "prompt_tokens_details", None)
+    cached_tokens = 0
+    if isinstance(prompt_details, dict):
+        cached_tokens = int(prompt_details.get("cached_tokens", 0) or 0)
+    elif prompt_details is not None:
+        cached_tokens = int(getattr(prompt_details, "cached_tokens", 0) or 0)
+    input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    total_tokens = int(getattr(usage, "total_tokens", 0) or 0) or input_tokens + output_tokens
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cache_read_input_tokens": cached_tokens,
+        "cache_write_input_tokens": 0,
+    }
 
 class OpenAIProvider(LLMProvider):
     """LLM provider using the OpenAI API (GPT / o-series models)."""
@@ -38,10 +63,7 @@ class OpenAIProvider(LLMProvider):
         usage = response.usage
         return LLMResponse(
             content=choice.message.content or "",
-            usage={
-                "input_tokens": usage.prompt_tokens if usage else 0,
-                "output_tokens": usage.completion_tokens if usage else 0,
-            },
+            usage=_usage_dict(usage),
             raw=response,
         )
 
@@ -64,9 +86,6 @@ class OpenAIProvider(LLMProvider):
         usage = response.usage
         return LLMResponse(
             content=choice.message.content or "",
-            usage={
-                "input_tokens": usage.prompt_tokens if usage else 0,
-                "output_tokens": usage.completion_tokens if usage else 0,
-            },
+            usage=_usage_dict(usage),
             raw=response,
         )

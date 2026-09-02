@@ -33,8 +33,8 @@ class BaselineCodeExecAgent(McpAgent):
     def solve(self, task, shared_client=None):
         """Standard solve with code executor."""
         from agent_evolve.agents.mcp.tools import create_tool_wrappers
+        from agent_evolve.llm.factory import create_strands_model
         from strands import Agent
-        from strands.models import BedrockModel
 
         enabled_tools = task.metadata.get("enabled_tools", [])
         env_vars = {}
@@ -70,9 +70,9 @@ class BaselineCodeExecAgent(McpAgent):
         logger = logging.getLogger("adaptive_baseline")
         logger.info("Solving %s with %d tools (BASELINE - NO EVOLUTION)", task.id, len(tools))
 
-        model = BedrockModel(
+        model = create_strands_model(
             model_id=self.model_id,
-            region_name=self.region,
+            region=self.region,
             max_tokens=self.max_tokens,
             temperature=1.0,
             stop_sequences=[],

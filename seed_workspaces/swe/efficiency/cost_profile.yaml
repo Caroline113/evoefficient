@@ -1,0 +1,23 @@
+preferred_mode: balanced
+token_budget: 0
+step_budget: 0
+cost_currency: USD
+
+# Optional real API price table. Prices are per 1M tokens in cost_currency.
+# Leave these unset or 0 to use the backward-compatible token-equivalent
+# fallback. Fill hard/easy according to the models selected by
+# AEVOLVE_MODEL_HARD and AEVOLVE_MODEL_EASY.
+model_prices:
+  currency: USD
+  routes:
+    hard:
+      input_per_1m: 0.05
+      output_per_1m: 4.5
+      cache_read_per_1m: 1.5
+      cache_write_per_1m: 1.5
+    easy:
+      input_per_1m: 0.3
+      output_per_1m: 0.6
+      cache_read_per_1m: 0
+      cache_write_per_1m: 0
+  models: {}

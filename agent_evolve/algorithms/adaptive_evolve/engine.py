@@ -81,17 +81,12 @@ def _make_workspace_bash(workspace_root: str | Path):
 def _create_default_llm(config: EvolveConfig) -> LLMProvider:
     """Create default LLM provider based on config."""
     model = config.evolver_model
-    if "." in model and ("anthropic" in model or "amazon" in model or "meta" in model):
-        from ...llm.bedrock import BedrockProvider
-        return BedrockProvider(model_id=model, region=config.extra.get("region", "us-west-2"))
-    if model.startswith("claude"):
-        from ...llm.anthropic import AnthropicProvider
-        return AnthropicProvider(model=model)
-    if model.startswith(("gpt-", "o1", "o3")):
-        from ...llm.openai import OpenAIProvider
-        return OpenAIProvider(model=model)
-    from ...llm.bedrock import BedrockProvider
-    return BedrockProvider(model_id=model)
+    from ...llm.factory import create_llm_provider
+
+    return create_llm_provider(
+        model,
+        region=config.extra.get("region", "us-west-2"),
+    )
 
 
 class AdaptiveEvolveEngine(EvolutionEngine):
@@ -757,19 +752,15 @@ class AdaptiveEvolveEngine(EvolutionEngine):
     def _run_llm(self, prompt: str, workspace_root: Path) -> dict[str, Any]:
         """Run LLM with bash tool access."""
         bash_fn = _make_workspace_bash(workspace_root)
-        try:
-            from ...llm.bedrock import BedrockProvider
-            if isinstance(self.llm, BedrockProvider):
-                response = self.llm.converse_loop(
-                    system_prompt=self._system_prompt,
-                    user_message=prompt,
-                    tools=[BASH_TOOL_SPEC],
-                    tool_executor={"workspace_bash": lambda command: bash_fn(command)},
-                    max_tokens=self.config.evolver_max_tokens,
-                )
-                return {"content": response.content, "usage": response.usage}
-        except ImportError:
-            pass
+        if hasattr(self.llm, "converse_loop"):
+            response = self.llm.converse_loop(
+                system_prompt=self._system_prompt,
+                user_message=prompt,
+                tools=[BASH_TOOL_SPEC],
+                tool_executor={"workspace_bash": lambda command: bash_fn(command)},
+                max_tokens=self.config.evolver_max_tokens,
+            )
+            return {"content": response.content, "usage": response.usage}
         from ...llm.base import LLMMessage
         messages = [
             LLMMessage(role="system", content=self._system_prompt),

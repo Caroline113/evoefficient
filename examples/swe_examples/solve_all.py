@@ -10,7 +10,8 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
 
 SYSTEM_PROMPT = """\
 You are an expert software engineer, and you are interacting with a
@@ -30,11 +31,12 @@ def solve_one_task(task_dict: dict, args_dict: dict) -> dict:
     import time
     from pathlib import Path
 
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    repo_root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(repo_root))
     from agent_evolve.agents.swe.env import SWEBenchContainer, pull_image
 
     # Load tools from seed_workspaces/swe/tools/ (no longer in agent_evolve.agents.swe.tools)
-    _tools_dir = Path(__file__).resolve().parent.parent.parent.parent / "seed_workspaces" / "swe" / "tools"
+    _tools_dir = repo_root / "seed_workspaces" / "swe" / "tools"
     import importlib.util as _ilu
 
     def _load_tool_mod(name):
@@ -59,8 +61,8 @@ def solve_one_task(task_dict: dict, args_dict: dict) -> dict:
     get_submitted_patch = _submit_mod.get_submitted_patch
     from agent_evolve.types import Feedback, Task, Trajectory
     from agent_evolve.benchmarks.swe_verified_mini import SweVerifiedMiniBenchmark as SweVerifiedBenchmark
+    from agent_evolve.llm.factory import create_strands_model
     from strands import Agent
-    from strands.models import BedrockModel
     from strands.hooks.events import BeforeToolCallEvent
 
     logging.basicConfig(
@@ -123,9 +125,9 @@ def solve_one_task(task_dict: dict, args_dict: dict) -> dict:
         reset_submit_state()
         log.info("Container: %s | Image: %s", ctr.container_name, img)
 
-        model = BedrockModel(
+        model = create_strands_model(
             model_id=args_dict["model_id"],
-            region_name=args_dict["region"],
+            region=args_dict["region"],
             max_tokens=args_dict["max_tokens"],
         )
 

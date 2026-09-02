@@ -68,3 +68,40 @@ def test_loop_skips_solve_when_manages_own_evaluation(tmp_path):
     assert result.cycles_completed == 1
     assert result.converged is True
     assert not agent.solve.called
+
+def test_loop_calls_task_observer(tmp_path):
+    agent = _make_mock_agent(tmp_path)
+    benchmark = _make_mock_benchmark()
+    engine = StoppingEngine()
+    seen = []
+    config = EvolveConfig(max_cycles=10, batch_size=1)
+    loop = EvolutionLoop(
+        agent,
+        benchmark,
+        engine,
+        config,
+        task_observer=lambda obs, cycle: seen.append((obs.task.id, cycle)),
+    )
+    loop.versioning = MagicMock()
+
+    result = loop.run()
+
+    assert result.cycles_completed == 1
+    assert seen == [("t1", 1)]
+
+def test_loop_resume_merges_existing_score_history(tmp_path):
+    agent = _make_mock_agent(tmp_path)
+    benchmark = _make_mock_benchmark()
+    engine = StoppingEngine()
+    config = EvolveConfig(max_cycles=3, batch_size=1)
+    loop = EvolutionLoop(agent, benchmark, engine, config)
+    loop.versioning = MagicMock()
+
+    result = loop.run(
+        cycles=3,
+        start_cycle=3,
+        existing_score_history=[0.1, 0.2],
+    )
+
+    assert result.cycles_completed == 3
+    assert result.score_history == [0.1, 0.2, 0.9]

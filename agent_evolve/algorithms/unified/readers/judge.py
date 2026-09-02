@@ -85,18 +85,18 @@ class LLMJudgeReader:
         region = state.get("region", self.DEFAULT_REGION)
 
         try:
-            from agent_evolve.llm.bedrock import BedrockProvider
             from agent_evolve.llm.base import LLMMessage
+            from agent_evolve.llm.factory import create_llm_provider
         except ImportError as e:
-            logger.warning("BedrockProvider not available, skipping judge: %s", e)
+            logger.warning("LLM provider not available, skipping judge: %s", e)
             return {
                 "per_task": [
-                    _fallback(getattr(o.task, "id", ""), "BedrockProvider not importable")
+                    _fallback(getattr(o.task, "id", ""), "LLM provider not importable")
                     for o in observations
                 ]
             }
 
-        llm = BedrockProvider(model_id=model_id, region=region)
+        llm = create_llm_provider(model_id, region=region)
         verdicts: list[dict[str, Any]] = []
         for obs in observations:
             task_id = getattr(obs.task, "id", "")

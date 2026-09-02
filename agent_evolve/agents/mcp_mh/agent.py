@@ -26,8 +26,8 @@ from pathlib import Path
 from typing import Any
 
 from strands import Agent
-from strands.models import BedrockModel
 
+from ...llm.factory import create_strands_model
 from ..mcp.agent import McpAgent
 from ..mcp.docker_env import McpAtlasContainer, pull_image
 from ..mcp.key_registry import KeyRegistry, classify_error, redact_secrets
@@ -43,9 +43,9 @@ class McpMHAgent(McpAgent):
     """MCP tool-calling agent with dynamic harness.py hook support."""
 
     def _build_strands_agent(self, tools: list, task_prompt: str | None = None) -> Agent:
-        model = BedrockModel(
+        model = create_strands_model(
             model_id=self.model_id,
-            region_name=self.region,
+            region=self.region,
             max_tokens=self.max_tokens,
         )
         system_prompt = self._build_system_prompt(task_prompt=task_prompt)

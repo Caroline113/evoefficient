@@ -108,6 +108,8 @@ class BedrockProvider(LLMProvider):
 
         total_input_tokens = 0
         total_output_tokens = 0
+        total_cache_read_tokens = 0
+        total_cache_write_tokens = 0
         accumulated_text: list[str] = []
 
         for turn in range(max_turns):
@@ -126,6 +128,8 @@ class BedrockProvider(LLMProvider):
             usage = response.get("usage", {})
             total_input_tokens += usage.get("inputTokens", 0)
             total_output_tokens += usage.get("outputTokens", 0)
+            total_cache_read_tokens += usage.get("cacheReadInputTokens", 0)
+            total_cache_write_tokens += usage.get("cacheWriteInputTokens", 0)
 
             output_content = response.get("output", {}).get("message", {}).get("content", [])
             stop_reason = response.get("stopReason", "end_turn")
@@ -172,6 +176,9 @@ class BedrockProvider(LLMProvider):
             usage={
                 "input_tokens": total_input_tokens,
                 "output_tokens": total_output_tokens,
+                "total_tokens": total_input_tokens + total_output_tokens,
+                "cache_read_input_tokens": total_cache_read_tokens,
+                "cache_write_input_tokens": total_cache_write_tokens,
             },
             raw=response,
         )
@@ -234,6 +241,12 @@ class BedrockProvider(LLMProvider):
             usage={
                 "input_tokens": usage.get("inputTokens", 0),
                 "output_tokens": usage.get("outputTokens", 0),
+                "total_tokens": usage.get(
+                    "totalTokens",
+                    usage.get("inputTokens", 0) + usage.get("outputTokens", 0),
+                ),
+                "cache_read_input_tokens": usage.get("cacheReadInputTokens", 0),
+                "cache_write_input_tokens": usage.get("cacheWriteInputTokens", 0),
             },
             raw=response,
         )

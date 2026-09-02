@@ -145,8 +145,7 @@ class AgenticFilterAdaptation(RetrievalAdaptation):
         from .prompts import (
             SELECTION_SYSTEM_PROMPT, build_selection_prompt, parse_selection,
         )
-        from ...llm.bedrock import BedrockProvider
-        if not isinstance(self._llm, BedrockProvider):
+        if not hasattr(self._llm, "converse_loop"):
             return candidates[: self._keep_k]
         prompt = build_selection_prompt(self._query_text(task), candidates)
         resp = self._llm.converse_loop(

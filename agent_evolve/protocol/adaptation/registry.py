@@ -84,12 +84,12 @@ def _build_retrieval(*, workspace, out_dir, config, **_):
 
 def _build_agentic_filter(*, workspace, out_dir, config, **_):
     from .operators import AgenticFilterAdaptation
-    from ...llm.bedrock import BedrockProvider
+    from ...llm.factory import create_llm_provider
     index = _build_index(workspace, out_dir, config)
     region = (config.extra.get("region") if config else None) or "us-west-2"
     # Use the SOLVER-class model for the lightweight selection call.
     model_id = _adapt_cfg(config, "filter_model", "us.anthropic.claude-sonnet-4-6")
-    llm = BedrockProvider(model_id=model_id, region=region)
+    llm = create_llm_provider(model_id, region=region)
     return AgenticFilterAdaptation(
         index,
         top_k=int(_adapt_cfg(config, "candidate_k", 16)),

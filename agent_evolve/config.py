@@ -65,8 +65,12 @@ class EvolveConfig:
     #    testing against old baselines; unsafe for real evolution runs.
     evolver_trajectory_mode: str = "index"
 
-    # Parallelism (V2)
+    # Parallelism (V2). ``parallel_workers`` / ``parallel_backend`` are used
+    # by the unified example runners; ``solve_workers`` is the older config
+    # name used by YAML examples.
     solve_workers: int = 1
+    parallel_workers: int | None = None
+    parallel_backend: str = "thread"
 
     # Convergence
     egl_threshold: float = 0.05
@@ -80,6 +84,12 @@ class EvolveConfig:
     staleness_window: int = 5  # prune branches unused for N cycles
 
     extra: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.parallel_workers is None:
+            self.parallel_workers = self.solve_workers
+        else:
+            self.solve_workers = self.parallel_workers
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> EvolveConfig:

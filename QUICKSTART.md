@@ -26,9 +26,12 @@ A practical guide to using the `agent-evolve` package — from installation thro
 
 ### Install with uv (recommended)
 
+
 ```bash
+
 # Create a virtual environment
 uv venv .venv --python 3.11
+conda activate aevolve
 source .venv/bin/activate
 
 # Install from source

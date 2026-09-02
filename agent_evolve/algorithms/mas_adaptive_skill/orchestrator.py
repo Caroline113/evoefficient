@@ -13,8 +13,8 @@ from typing import Any
 
 from strands import Agent, tool
 from strands.hooks.events import BeforeToolCallEvent
-from strands.models import BedrockModel
 
+from ...llm.factory import create_strands_model
 from ..adaptive_skill.tools import make_workspace_bash
 from .prompts import (
     ANALYST_SYSTEM_PROMPT,
@@ -88,9 +88,9 @@ def run_evolution_cycle(
     )
 
     # Shared model for all agents
-    model = BedrockModel(
+    model = create_strands_model(
         model_id=model_id,
-        region_name=region,
+        region=region,
         max_tokens=max_tokens,
     )
 

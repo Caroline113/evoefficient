@@ -596,9 +596,7 @@ class OrchestratedTemplate(EvolutionTemplate):
         if llm is None:
             return _default_plan(batch_results, navigation_enabled)
         try:
-            from ....llm.bedrock import BedrockProvider
-
-            if not isinstance(llm, BedrockProvider):
+            if not hasattr(llm, "converse_loop"):
                 return _default_plan(batch_results, navigation_enabled)
 
             response = llm.converse_loop(

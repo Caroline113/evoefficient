@@ -285,17 +285,17 @@ def _solve_one_task(
             conversation = extract_conversation(react_result.messages)
             skill_draft = react_result.skill_draft  # v15: solver-proposed skill
         else:
+            from agent_evolve.llm.factory import create_strands_model
             from strands import Agent
-            from strands.models import BedrockModel
 
-            bedrock_model = BedrockModel(
+            model = create_strands_model(
                 model_id=model_id,
-                region_name=region,
+                region=region,
                 max_tokens=max_tokens,
             )
             tools = [task_bash, task_python, task_submit]
             agent = Agent(
-                model=bedrock_model,
+                model=model,
                 system_prompt=system_prompt,
                 tools=tools,
             )
@@ -669,8 +669,8 @@ def main():
     # Model / solver
     p.add_argument("--model-id", type=str,
                    default="us.anthropic.claude-opus-4-6-v1",
-                   help="Bedrock model ID")
-    p.add_argument("--region", type=str, default="us-west-2", help="AWS region")
+                   help="Model ID; accepts Bedrock IDs or openrouter:<model>")
+    p.add_argument("--region", type=str, default="us-west-2", help="AWS region for Bedrock")
     p.add_argument("--max-tokens", type=int, default=16384,
                    help="Max tokens per model response")
     p.add_argument("--solver", type=str, default="react", choices=["react", "strands"],

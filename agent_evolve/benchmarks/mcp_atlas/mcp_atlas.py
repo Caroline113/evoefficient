@@ -14,6 +14,7 @@ import asyncio
 import logging
 import os
 import time
+from ...llm.factory import OPENROUTER_BASE_URL, resolve_model_selection
 from ...agents.mcp.key_registry import KeyRegistry
 from ...agents.mcp.task_filter import filter_tasks_by_keys
 from ...types import Feedback, Task, Trajectory
@@ -57,10 +58,26 @@ class McpAtlasBenchmark(BenchmarkAdapter):
         self.dataset_name = dataset_name
         self.shuffle = shuffle
         self.holdout_ratio = holdout_ratio
+        eval_provider, selected_eval_model = resolve_model_selection(eval_model_id)
+        if eval_provider == "openrouter":
+            eval_model_id = (
+                selected_eval_model
+                if selected_eval_model.startswith("openrouter/")
+                else f"openrouter/{selected_eval_model}"
+            )
+            use_litellm = True
+        elif eval_provider == "openai":
+            eval_model_id = (
+                selected_eval_model
+                if selected_eval_model.startswith("openai/")
+                else f"openai/{selected_eval_model}"
+            )
+            use_litellm = True
         self.eval_model_id = eval_model_id
         self.eval_region = eval_region
         self._cache: dict[str, list[dict]] = {}
         self._split_done = False
+        self._cursor = 0
 
         # Check environment variable override
         env_use_litellm = os.getenv("EVAL_USE_LITELLM", "").lower()
@@ -80,11 +97,25 @@ class McpAtlasBenchmark(BenchmarkAdapter):
 
     # ── Public API ───────────────────────────────────────────────────
 
+    @property
+    def feedback_capability(self):
+        """Declare the static evidence shape exposed by MCP-Atlas evals."""
+        from ...algorithms.unified.types import FeedbackCapability
+
+        return FeedbackCapability(
+            has_pass_fail=True,
+            has_partial_score=True,
+            has_per_claim=True,
+            has_per_test=False,
+            solver_may_propose=False,
+            judge_available=True,
+        )
+
     def get_tasks(self, split: str = "train", limit: int = 10, key_registry: KeyRegistry | None = None) -> list[Task]:
         """Return up to *limit* Task objects from the requested split."""
         rows = self._load_split(split)
         tasks: list[Task] = []
-        for row in rows[:limit]:
+        for row in self._select_rows(split, rows, limit):
             # MCP-Atlas HF dataset uses uppercase column names:
             #   TASK, ENABLED_TOOLS, PROMPT, GTFA_CLAIMS, TRAJECTORY
             task_id = row.get("TASK") or row.get("task_id", "")
@@ -262,7 +293,12 @@ class McpAtlasBenchmark(BenchmarkAdapter):
         prompt = self._get_evaluation_prompt(claim, response)
 
         # Get API key from environment
-        api_key = os.getenv("EVAL_LLM_API_KEY") or os.getenv("LLM_API_KEY")
+        api_key = (
+            os.getenv("EVAL_LLM_API_KEY")
+            or os.getenv("LLM_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+            or os.getenv("OPENROUTER_API_KEY")
+        )
         if not api_key:
             logger.warning(
                 "No API key found. Set EVAL_LLM_API_KEY or LLM_API_KEY env var.\n"
@@ -282,7 +318,12 @@ class McpAtlasBenchmark(BenchmarkAdapter):
                     response_format={"type": "json_object"},
                     temperature=0.0,
                     api_key=api_key,
-                    api_base=os.getenv("EVAL_LLM_BASE_URL") or None,
+                    api_base=(
+                        os.getenv("EVAL_LLM_BASE_URL")
+                        or os.getenv("OPENAI_BASE_URL")
+                        or os.getenv("OPENROUTER_BASE_URL")
+                        or (OPENROUTER_BASE_URL if self.eval_model_id.startswith("openrouter/") else None)
+                    ),
                 )
 
                 content = result.choices[0].message.content
@@ -591,3 +632,13 @@ class McpAtlasBenchmark(BenchmarkAdapter):
             len(self._cache["train"]),
             len(self._cache["holdout"]),
         )
+
+    def _select_rows(self, split: str, rows: list[dict], limit: int) -> list[dict]:
+        limit = max(0, int(limit))
+        if split != "train":
+            return rows[:limit]
+
+        start = max(0, int(getattr(self, "_cursor", 0)))
+        end = start + limit
+        self._cursor = end
+        return rows[start:end]

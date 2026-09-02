@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import Any
 
 from strands import Agent, tool
-from strands.models import BedrockModel
 
+from ...llm.factory import create_strands_model
 from ...protocol.base_agent import BaseAgent
 from ...types import Task, Trajectory
 from .colors import COLOR_LEGEND, COLOR_NAMES
@@ -403,9 +403,9 @@ class StrandsArcAgent(BaseAgent):
 
         # ── Build strands agent ──────────────────────────────────────
 
-        model = BedrockModel(
+        model = create_strands_model(
             model_id=self.model_id,
-            region_name=self.region,
+            region=self.region,
             max_tokens=self.max_tokens,
         )
 

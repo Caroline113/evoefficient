@@ -45,7 +45,6 @@ from agent_evolve.algorithms.unified import UnifiedEngine
 from agent_evolve.benchmarks.swe_verified_mini.benchmark import SweVerifiedMiniBenchmark
 from agent_evolve.config import EvolveConfig
 from agent_evolve.engine.loop import EvolutionLoop
-from agent_evolve.llm.bedrock import BedrockProvider
 
 logger = logging.getLogger(__name__)
 

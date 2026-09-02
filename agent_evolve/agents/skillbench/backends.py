@@ -25,7 +25,7 @@ from typing import Any, Callable, Protocol
 import yaml
 
 from ...llm.base import LLMMessage, LLMResponse
-from ...llm.bedrock import BedrockProvider
+from ...llm.factory import create_llm_provider
 from ...types import Task, Trajectory
 from .docker_env import SkillBenchContainer, VerificationResult, build_image
 from .official_terminus import (
@@ -289,8 +289,7 @@ def _manage_conversation(
     # Try to summarize via LLM
     try:
         if provider is None:
-            from ...llm.bedrock import BedrockProvider as _BP
-            provider = _BP(model_id=model_id, region=region)
+            provider = create_llm_provider(model_id, region=region)
 
         # Build summarization request from old messages
         summary_text_parts = []
@@ -1063,7 +1062,7 @@ class NativeSkillBenchBackend:
                 "skill_tool_events": [],
             }
 
-        provider = BedrockProvider(model_id=self.model_id, region=self.region)
+        provider = create_llm_provider(self.model_id, region=self.region)
         available_skills = _discover_available_skills(container)
         loaded_skills_map: dict[str, str] = {}
         skill_tool_events: list[dict[str, Any]] = [
@@ -1377,7 +1376,7 @@ class NativeSkillBenchBackend:
                 "episode_trace_path": None,
             }
 
-        provider = BedrockProvider(model_id=self.model_id, region=self.region)
+        provider = create_llm_provider(self.model_id, region=self.region)
         parser = TerminusJSONPlainParser()
         skill_loader = OfficialSkillDocLoader(container=container)
         skill_dirs = list(OFFICIAL_SKILL_DIRS)

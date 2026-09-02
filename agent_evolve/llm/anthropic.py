@@ -7,6 +7,28 @@ from typing import Any
 from .base import LLMMessage, LLMProvider, LLMResponse
 
 
+def _usage_dict(usage: Any) -> dict[str, int]:
+    if usage is None:
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+        }
+    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "cache_read_input_tokens": cache_read,
+        "cache_write_input_tokens": cache_write,
+    }
+
+
 class AnthropicProvider(LLMProvider):
     """LLM provider using the Anthropic API (Claude models)."""
 
@@ -46,10 +68,7 @@ class AnthropicProvider(LLMProvider):
         response = self.client.messages.create(**params)
         return LLMResponse(
             content=response.content[0].text if response.content else "",
-            usage={
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-            },
+            usage=_usage_dict(response.usage),
             raw=response,
         )
 
@@ -81,9 +100,6 @@ class AnthropicProvider(LLMProvider):
         text_parts = [b.text for b in response.content if hasattr(b, "text")]
         return LLMResponse(
             content="\n".join(text_parts),
-            usage={
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-            },
+            usage=_usage_dict(response.usage),
             raw=response,
         )

@@ -52,8 +52,8 @@ class CodeExecMcpAgent(McpAgent):
         """Override solve to inject the code executor tool."""
         from agent_evolve.agents.mcp.tools import create_tool_wrappers
         from agent_evolve.agents.mcp.docker_env import McpAtlasContainer
+        from agent_evolve.llm.factory import create_strands_model
         from strands import Agent
-        from strands.models import BedrockModel
 
         enabled_tools = task.metadata.get("enabled_tools", [])
         env_vars = {}
@@ -91,9 +91,9 @@ class CodeExecMcpAgent(McpAgent):
         logger.info("Solving %s with %d tools", task.id, len(tools))
 
         # Build agent
-        model = BedrockModel(
+        model = create_strands_model(
             model_id=self.model_id,
-            region_name=self.region,
+            region=self.region,
             max_tokens=self.max_tokens,
             # Ensure model doesn't stop prematurely (reduces empty_output failures)
             temperature=1.0,  # Default reasoning temperature

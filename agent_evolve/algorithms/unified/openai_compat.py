@@ -24,14 +24,33 @@ class OpenAICompatProvider:
             raise ImportError("Install openai to use an OpenAI-compatible evolver") from exc
 
         self.model = model
+        openrouter_key = (
+            os.environ.get("AEVOLVE_OPENROUTER_API_KEY")
+            or os.environ.get("OPENROUTER_API_KEY")
+        )
+        openai_key = (
+            os.environ.get("AEVOLVE_OPENAI_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+        )
         resolved_base_url = (
             base_url
+            or os.environ.get("AEVOLVE_OPENAI_BASE_URL")
             or os.environ.get("EVOLVER_OPENAI_BASE_URL")
+            or os.environ.get("AEVOLVE_OPENROUTER_BASE_URL")
+            or os.environ.get("OPENROUTER_BASE_URL")
             or os.environ.get("OPENAI_BASE_URL")
+            or (
+                "https://openrouter.ai/api/v1"
+                if openrouter_key and not openai_key
+                else None
+            )
         )
         resolved_api_key = (
             api_key
+            or os.environ.get("AEVOLVE_OPENAI_API_KEY")
             or os.environ.get("EVOLVER_OPENAI_API_KEY")
+            or os.environ.get("AEVOLVE_OPENROUTER_API_KEY")
+            or os.environ.get("OPENROUTER_API_KEY")
             or os.environ.get("OPENAI_API_KEY")
         )
         kwargs: dict[str, Any] = {}
@@ -40,6 +59,22 @@ class OpenAICompatProvider:
             kwargs["api_key"] = resolved_api_key or "EMPTY"
         elif resolved_api_key:
             kwargs["api_key"] = resolved_api_key
+        if resolved_base_url and "openrouter.ai" in resolved_base_url:
+            headers: dict[str, str] = {}
+            referer = (
+                os.environ.get("OPENROUTER_SITE_URL")
+                or os.environ.get("OPENROUTER_HTTP_REFERER")
+            )
+            title = (
+                os.environ.get("OPENROUTER_APP_NAME")
+                or os.environ.get("OPENROUTER_TITLE")
+            )
+            if referer:
+                headers["HTTP-Referer"] = referer
+            if title:
+                headers["X-OpenRouter-Title"] = title
+            if headers:
+                kwargs["default_headers"] = headers
         self.client = openai.OpenAI(**kwargs)
 
     def complete(

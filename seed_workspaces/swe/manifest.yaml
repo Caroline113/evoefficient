@@ -10,5 +10,6 @@ evolvable_layers:
   - prompts
   - skills
   - memory
+  - efficiency
 
 reload_strategy: hot

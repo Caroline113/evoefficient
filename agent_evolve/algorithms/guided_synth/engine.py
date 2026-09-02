@@ -111,7 +111,7 @@ SKIP: <name>
     @property
     def llm(self) -> LLMProvider:
         if self._llm is None:
-            from ..aevolve.tools import create_default_llm
+            from ..adaptive_skill.tools import create_default_llm
             self._llm = create_default_llm(self.config)
         return self._llm
 
@@ -189,6 +189,17 @@ SKIP: <name>
             metadata={
                 "cycle": self._cycle_count,
                 "proposals": len(proposals),
+                "proposal_details": [
+                    {
+                        "name": p.get("name", ""),
+                        "action": p.get("action", ""),
+                        "confidence": p.get("confidence", ""),
+                        "source_task": p.get("source_task", ""),
+                        "description": p.get("description", ""),
+                    }
+                    for p in proposals
+                ],
+                "decisions_raw": decisions[:4000] if proposals else "",
                 "applied": applied_names,
             },
         )
@@ -363,9 +374,12 @@ SKIP: <name>
             return None
 
         for line in decisions_raw.split("\n"):
-            line = line.strip().strip("*").strip()  # strip markdown bold **
+            line = self._normalize_tagged_line(line)
+            if not line:
+                continue
+            label = line.split(":", 1)[0].strip().upper() if ":" in line else ""
 
-            if line.startswith("ACCEPT:"):
+            if label == "ACCEPT":
                 raw_name = line.split(":", 1)[1].strip()
                 name = _fuzzy_match_proposal(raw_name)
                 if name and name not in existing_skills:
@@ -377,7 +391,7 @@ SKIP: <name>
                         applied.append(f"accept:{name}")
                         logger.info("Curated ACCEPT: %s", name)
 
-            elif line.startswith("REPLACE:"):
+            elif label == "REPLACE":
                 # REPLACE: new_name REPLACES old_name
                 parts = line.split(":", 1)[1].strip()
                 if " REPLACES " in parts:
@@ -394,7 +408,7 @@ SKIP: <name>
                         applied.append(f"replace:{old_name}->{new_name}")
                         logger.info("Curated REPLACE: %s -> %s", old_name, new_name)
 
-            elif line.startswith("MERGE:"):
+            elif label == "MERGE":
                 # MERGE: proposal_name INTO existing_name
                 parts = line.split(":", 1)[1].strip()
                 if " INTO " in parts:
@@ -424,11 +438,27 @@ SKIP: <name>
                                 applied.append(f"merge:{prop_name}->{target_name}")
                                 logger.info("Curated MERGE: %s into %s", prop_name, target_name)
 
-            elif line.startswith("SKIP:"):
+            elif label == "SKIP":
                 name = line.split(":", 1)[1].strip()
                 logger.info("Curated SKIP: %s", name)
 
         return applied
+
+    @staticmethod
+    def _normalize_tagged_line(line: str) -> str:
+        """Normalize simple tagged LLM output lines like ``- **ACCEPT:** x``."""
+        text = str(line or "").strip()
+        text = re.sub(r"^(?:[-*]\s*|\d+[.)]\s*)", "", text).strip()
+        text = re.sub(
+            r"^\*\*\s*([A-Za-z_]+)\s*:\s*\*\*",
+            lambda m: f"{m.group(1).upper()}:",
+            text,
+        ).strip()
+        text = text.strip("*").strip()
+        match = re.match(r"^([A-Za-z_]+)\s*:\s*(.*)$", text)
+        if match:
+            return f"{match.group(1).upper()}: {match.group(2).strip()}"
+        return text
 
     # ── Legacy: failure context (still used for non-curation mode) ──
 
@@ -566,17 +596,20 @@ SKIP: <name>
         in_content = False
 
         for line in lines:
-            if line.startswith("TYPE:"):
-                itype = line.split(":", 1)[1].strip().lower()
-            elif line.startswith("NAME:"):
-                name = line.split(":", 1)[1].strip()
-            elif line.startswith("DESCRIPTION:"):
-                description = line.split(":", 1)[1].strip()
-            elif line.startswith("CONTENT:"):
+            normalized = self._normalize_tagged_line(line)
+            tag_match = re.match(r"^(TYPE|NAME|DESCRIPTION|CONTENT)\s*:\s*(.*)$", normalized, flags=re.IGNORECASE)
+            tag = tag_match.group(1).upper() if tag_match else ""
+            value = tag_match.group(2).strip() if tag_match else ""
+            if tag == "TYPE":
+                itype = value.lower()
+            elif tag == "NAME":
+                name = value
+            elif tag == "DESCRIPTION":
+                description = value
+            elif tag == "CONTENT":
                 in_content = True
-                rest = line.split(":", 1)[1].strip()
-                if rest:
-                    content_lines.append(rest)
+                if value:
+                    content_lines.append(value)
             elif in_content:
                 content_lines.append(line)
 

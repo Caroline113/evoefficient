@@ -1,0 +1,15 @@
+name: hotpotqa-evoefficient-agent
+version: 0.1.0
+contract_version: "1.0"
+
+agent:
+  type: reference
+  entrypoint: agent_evolve.agents.hotpotqa.agent.HotpotQAAgent
+
+evolvable_layers:
+  - prompts
+  - skills
+  - memory
+  - efficiency
+
+reload_strategy: hot

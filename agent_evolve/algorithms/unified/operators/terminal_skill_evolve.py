@@ -323,20 +323,15 @@ class TerminalSkillEvolve:
         bash_fn: Any,
         max_tokens: int,
     ) -> str:
-        try:
-            from agent_evolve.llm.bedrock import BedrockProvider
-
-            if isinstance(provider, BedrockProvider):
-                response = provider.converse_loop(
-                    system_prompt=DEFAULT_EVOLVER_SYSTEM_PROMPT,
-                    user_message=prompt,
-                    tools=[BASH_TOOL_SPEC],
-                    tool_executor={"workspace_bash": bash_fn},
-                    max_tokens=max_tokens,
-                )
-                return response.content
-        except ImportError:
-            pass
+        if hasattr(provider, "converse_loop"):
+            response = provider.converse_loop(
+                system_prompt=DEFAULT_EVOLVER_SYSTEM_PROMPT,
+                user_message=prompt,
+                tools=[BASH_TOOL_SPEC],
+                tool_executor={"workspace_bash": bash_fn},
+                max_tokens=max_tokens,
+            )
+            return response.content
 
         from agent_evolve.llm.base import LLMMessage
 

@@ -52,6 +52,21 @@ class SweVerifiedMiniBenchmark(BenchmarkAdapter):
         self.eval_timeout = eval_timeout
         self._cache: dict[str, list[dict]] = {}
         self._split_done = False
+        self._cursor = 0
+
+    @property
+    def feedback_capability(self):
+        """Declare the static evidence shape exposed by SWE-bench evals."""
+        from ...algorithms.unified.types import FeedbackCapability
+
+        return FeedbackCapability(
+            has_pass_fail=True,
+            has_partial_score=False,
+            has_per_claim=False,
+            has_per_test=True,
+            solver_may_propose=True,
+            judge_available=False,
+        )
 
     def get_tasks(self, split: str = "test", limit: int = 10) -> list[Task]:
         """Load SWE-bench tasks from HuggingFace.
@@ -86,7 +101,9 @@ class SweVerifiedMiniBenchmark(BenchmarkAdapter):
                 if len(rows) < before:
                     logger.info("Filtered to %d tasks with Docker images (from %d)", len(rows), before)
 
-        for row in rows[:limit]:
+        selected_rows = self._select_rows(split, rows, limit)
+
+        for row in selected_rows:
             instance_id = row["instance_id"]
 
             # Derive version for Live tasks
@@ -276,6 +293,16 @@ class SweVerifiedMiniBenchmark(BenchmarkAdapter):
             len(rows), self.dataset_name,
             len(self._cache["train"]), len(self._cache["holdout"]),
         )
+
+    def _select_rows(self, split: str, rows: list[dict], limit: int) -> list[dict]:
+        limit = max(0, int(limit))
+        if split != "train":
+            return rows[:limit]
+
+        start = max(0, int(getattr(self, "_cursor", 0)))
+        end = start + limit
+        self._cursor = end
+        return rows[start:end]
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────

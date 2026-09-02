@@ -9,19 +9,52 @@ Modeled after inspect_ai's text_editor tool.
 from __future__ import annotations
 
 import subprocess
+from typing import Any
 from typing import Literal
 
 from strands import tool
 
 _container_name: str | None = None
 _edit_history: dict[str, list[str]] = {}  # file_path -> list of previous contents
+_efficiency_config: dict[str, Any] = {}
 
 
 def reset(container_name: str | None = None, **kwargs) -> None:
     """Reset state for a new task."""
-    global _container_name, _edit_history
+    global _container_name, _edit_history, _efficiency_config
     _container_name = container_name
     _edit_history = {}
+    _efficiency_config = kwargs.get("efficiency_config") or {}
+
+
+def _strategy_enabled(name: str) -> bool:
+    return name in set(_efficiency_config.get("strategies", []))
+
+
+def _strategy_params(name: str) -> dict[str, Any]:
+    params = _efficiency_config.get("parameters", {})
+    val = params.get(name, {}) if isinstance(params, dict) else {}
+    return val if isinstance(val, dict) else {}
+
+
+def _trim_tool_output(output: str) -> str:
+    max_chars = 15000
+    label = "truncated"
+    if _strategy_enabled("adaptive_tool_trimming"):
+        max_chars = int(_strategy_params("adaptive_tool_trimming").get("max_chars", 8000) or 8000)
+        label = "EvoEfficient adaptive_tool_trimming truncated editor output"
+    elif _strategy_enabled("verbatim_compaction"):
+        max_chars = int(_strategy_params("verbatim_compaction").get("max_chars", 6000) or 6000)
+        label = "EvoEfficient verbatim_compaction truncated editor output"
+    elif _strategy_enabled("observation_filter"):
+        max_chars = int(_strategy_params("observation_filter").get("max_chars", 6000) or 6000)
+        label = "EvoEfficient observation_filter truncated editor output"
+
+    if len(output) <= max_chars:
+        return output
+    head = max_chars // 2
+    tail = max_chars - head
+    return output[:head] + f"\n\n... [{label}] ...\n\n" + output[-tail:]
 
 
 def _exec(command: str, timeout: int = 180) -> str:
@@ -74,11 +107,11 @@ def text_editor(
             parts = view_range.split("-")
             if len(parts) == 2:
                 start, end = parts[0].strip(), parts[1].strip()
-                return _exec(f"sed -n '{start},{end}p' '{path}' | cat -n")
+                return _trim_tool_output(_exec(f"sed -n '{start},{end}p' '{path}' | cat -n"))
             else:
-                return _exec(f"cat -n '{path}'")
+                return _trim_tool_output(_exec(f"cat -n '{path}'"))
         else:
-            return _exec(f"cat -n '{path}'")
+            return _trim_tool_output(_exec(f"cat -n '{path}'"))
 
     elif command == "create":
         if not file_text:

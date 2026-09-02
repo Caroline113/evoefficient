@@ -267,9 +267,8 @@ class StructuredNavigationTemplate(EvolutionTemplate):
                 if index_lines:
                     analyst_prompt += "\n\n## Batch Index\n```\n" + "\n".join(index_lines) + "\n```\n"
                 logger.info("Phase 1: retrying without bash (index embedded)...")
-                from ....llm.bedrock import BedrockProvider
                 llm = self.engine.llm
-                if isinstance(llm, BedrockProvider):
+                if hasattr(llm, "converse_loop"):
                     response = llm.converse_loop(
                         system_prompt=system,
                         user_message=analyst_prompt,

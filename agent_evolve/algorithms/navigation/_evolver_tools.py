@@ -322,23 +322,9 @@ def make_workspace_bash(
 def create_default_llm(config: EvolveConfig) -> LLMProvider:
     """Create the default LLM provider based on the evolver_model config string."""
     model = config.evolver_model
+    from ...llm.factory import create_llm_provider
 
-    if "." in model and ("anthropic" in model or "amazon" in model or "meta" in model):
-        from ...llm.bedrock import BedrockProvider
-
-        region = config.extra.get("region", "us-west-2")
-        return BedrockProvider(model_id=model, region=region)
-
-    if model.startswith("claude"):
-        from ...llm.anthropic import AnthropicProvider
-
-        return AnthropicProvider(model=model)
-
-    if model.startswith(("gpt-", "o1", "o3")):
-        from ...llm.openai import OpenAIProvider
-
-        return OpenAIProvider(model=model)
-
-    from ...llm.bedrock import BedrockProvider
-
-    return BedrockProvider(model_id=model)
+    return create_llm_provider(
+        model,
+        region=config.extra.get("region", "us-west-2"),
+    )
