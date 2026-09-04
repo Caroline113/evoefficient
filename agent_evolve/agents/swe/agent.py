@@ -1234,33 +1234,33 @@ class SweAgent(BaseAgent):
                         "- Did your repro script catch the real issue, or was it too simple?\n"
                         "- Were there edge cases in the issue that you didn't test?\n"
                         "- Did you verify your fix doesn't break adjacent functionality?\n\n"
-                        "Propose a VERIFICATION skill that helps future solvers test more thoroughly.\n"
+                        "Propose a VERIFICATION intervention that helps future solvers test more thoroughly.\n"
                         "Focus ONLY on how to verify/test — not on how to find or write the fix.\n\n"
-                        "CRITICAL: The skill must be GENERALIZABLE — applicable to many different tasks, "
+                        "CRITICAL: The intervention must be GENERALIZABLE — applicable to many different tasks, "
                         "not just this one. Abstract away the specific framework/module details.\n"
                         "  GOOD names: verify_falsy_edge_cases, verify_before_after_edit, verify_inheritance_chain, "
                         "verify_roundtrip_integrity, verify_mutable_state_isolation\n"
                         "  BAD names: verify_admin_kwargs_passthrough, verify_django_enum_str, verify_sphinx_toctree\n"
                         "  GOOD content: general methodology (e.g., 'test all falsy-but-valid values: 0, False, \"\", [], {}')\n"
                         "  BAD content: specific code paths (e.g., 'check django/contrib/admin/options.py line 200')\n\n"
-                        "OPTION A — ENHANCE an existing verification skill:\n"
+                        "OPTION A — ENHANCE an existing verification intervention:\n"
                         "CONFIDENCE: HIGH/MEDIUM/LOW\n"
                         "ACTION: ENHANCE\n"
-                        "TARGET: existing_skill_name\n"
+                        "TARGET: existing_intervention_name\n"
                         "ANALYSIS: what was missing in the verification approach\n"
-                        "TYPE: skill\n"
+                        "TYPE: skill | fragment | tool | memory\n"
                         "NAME: same_skill_name\n"
                         "DESCRIPTION: TRIGGER when / DO NOT TRIGGER when (one sentence)\n"
                         "CONTENT:\n"
-                        "(verification methodology, under 500 words)\n\n"
-                        "OPTION B — NEW verification skill:\n"
+                        "(methodology under 500 words, or complete Strands @tool Python source for TYPE: tool)\n\n"
+                        "OPTION B — NEW verification intervention:\n"
                         "CONFIDENCE: HIGH/MEDIUM/LOW\n"
                         "ACTION: NEW\n"
-                        "TYPE: skill\n"
+                        "TYPE: skill | fragment | tool | memory\n"
                         "NAME: verify_<general_pattern>\n"
                         "DESCRIPTION: TRIGGER when / DO NOT TRIGGER when (one sentence)\n"
                         "CONTENT:\n"
-                        "(verification methodology, under 500 words)\n\n"
+                        "(methodology under 500 words, or complete Strands @tool Python source for TYPE: tool)\n\n"
                         "OPTION C — No proposal:\n"
                         "CONFIDENCE: HIGH/MEDIUM/LOW\n"
                         "ACTION: NONE"
@@ -1268,7 +1268,7 @@ class SweAgent(BaseAgent):
                     else:
                         proposal_prompt = (
                         f"{skill_context}"
-                        "Help FUTURE solvers by proposing or enhancing a skill.\n\n"
+                        "Help FUTURE solvers by proposing or enhancing a reusable intervention.\n\n"
                         "IMPORTANT RULES:\n"
                         "- NAME must be GENERIC and reusable.\n"
                         "  GOOD: fix_shallow_copy_mutation, align_parallel_code_paths\n"
@@ -1277,25 +1277,28 @@ class SweAgent(BaseAgent):
                         "  GOOD: 'TRIGGER when: copied objects share mutable state, or __deepcopy__ is defined. "
                         "DO NOT TRIGGER when: simple value assignment or immutable types.'\n"
                         "  BAD:  'Fix for deep copy issues' (too vague, no trigger conditions)\n"
+                        "- TYPE can be skill, fragment, tool, or memory. Prefer skill/fragment. "
+                        "Use tool only for a deterministic safe helper; CONTENT must include "
+                        "`from strands import tool`, `@tool`, and a Python function.\n"
                         "- Prefer OPTION A (enhance existing) over OPTION B (new).\n\n"
-                        "OPTION A — ENHANCE an existing skill:\n"
+                        "OPTION A — ENHANCE an existing intervention:\n"
                         "CONFIDENCE: HIGH/MEDIUM/LOW\n"
                         "ACTION: ENHANCE\n"
-                        "TARGET: existing_skill_name\n"
+                        "TARGET: existing_intervention_name\n"
                         "ANALYSIS: one sentence on what to improve\n"
-                        "TYPE: skill\n"
+                        "TYPE: skill | fragment | tool | memory\n"
                         "NAME: same_skill_name\n"
                         "DESCRIPTION: one sentence, max 15 words\n"
                         "CONTENT:\n"
-                        "(enhanced methodology, under 500 words)\n\n"
-                        "OPTION B — NEW skill (only if nothing existing covers this):\n"
+                        "(methodology under 500 words, or complete Strands @tool Python source for TYPE: tool)\n\n"
+                        "OPTION B — NEW intervention (only if nothing existing covers this):\n"
                         "CONFIDENCE: HIGH/MEDIUM/LOW\n"
                         "ACTION: NEW\n"
-                        "TYPE: skill\n"
+                        "TYPE: skill | fragment | tool | memory\n"
                         "NAME: pattern_name\n"
                         "DESCRIPTION: one sentence, max 15 words\n"
                         "CONTENT:\n"
-                        "(methodology, under 500 words)\n\n"
+                        "(methodology under 500 words, or complete Strands @tool Python source for TYPE: tool)\n\n"
                         "OPTION C — No proposal:\n"
                         "CONFIDENCE: HIGH/MEDIUM/LOW\n"
                         "ACTION: NONE"
@@ -1308,17 +1311,17 @@ class SweAgent(BaseAgent):
                     )
                     proposal_response = proposal_llm.complete(
                         [LLMMessage(role="user", content=proposal_prompt)],
-                        max_tokens=1024,
+                        max_tokens=4096,
                         temperature=0.2,
                     )
-                    skill_proposal = str(proposal_response.content or "").strip()[:2500]
+                    skill_proposal = str(proposal_response.content or "").strip()
                     if "ACTION: NONE" not in skill_proposal.upper():
                         action = "ENHANCE" if "ACTION: ENHANCE" in skill_proposal.upper() else "NEW"
-                        logger.info("Skill proposal (%s) for %s: %s", action, instance_id, skill_proposal[:100])
+                        logger.info("Intervention proposal (%s) for %s: %s", action, instance_id, skill_proposal[:100])
                     else:
                         skill_proposal = skill_proposal if "CONFIDENCE:" in skill_proposal else ""
                 except Exception as e:
-                    logger.warning("Skill proposal failed for %s: %s", instance_id, e)
+                    logger.warning("Intervention proposal failed for %s: %s", instance_id, e)
 
         traj = Trajectory(task_id=task.id, output=patch, steps=steps)
         traj._conversation = conversation

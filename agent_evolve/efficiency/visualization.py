@@ -37,6 +37,12 @@ def write_summary_table(rows: list[dict[str, Any]], path: str | Path) -> None:
         "estimated_usage_tasks",
         "token_record_quality",
     ]
+    extras: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in headers and key not in extras:
+                extras.append(key)
+    headers = headers + extras
     lines = [",".join(headers)]
     for row in rows:
         values = []
@@ -44,6 +50,8 @@ def write_summary_table(rows: list[dict[str, Any]], path: str | Path) -> None:
             value = row.get(h, "")
             if h == "strategies" and isinstance(value, list):
                 value = ";".join(str(v) for v in value)
+            elif isinstance(value, (dict, list)):
+                value = json.dumps(value, ensure_ascii=False, sort_keys=True)
             values.append(str(value).replace(",", ";"))
         lines.append(",".join(values))
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -159,3 +167,72 @@ def write_strategy_library_plot(rows: list[dict[str, Any]], output_dir: str | Pa
     fig.savefig(path, dpi=160)
     plt.close(fig)
     return str(path)
+
+
+def write_proposal_category_plots(
+    adoption_records: list[dict[str, Any]],
+    output_dir: str | Path,
+) -> dict[str, str]:
+    """Plot emergent proposal adoption by M1-M7 category and artifact kind."""
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(out / ".matplotlib"))
+
+    category_counts: dict[str, int] = {}
+    kind_counts: dict[str, int] = {}
+    for record in adoption_records:
+        if record.get("status") != "applied":
+            continue
+        proposal = record.get("proposal", {}) if isinstance(record.get("proposal"), dict) else {}
+        categories = record.get("categories") or proposal.get("categories") or []
+        if isinstance(categories, str):
+            categories = [categories]
+        for category in categories:
+            name = str(category or "").strip()
+            if name:
+                category_counts[name] = category_counts.get(name, 0) + 1
+        kind = str(record.get("kind") or proposal.get("kind") or "unknown").strip() or "unknown"
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+
+    paths: dict[str, str] = {}
+    import matplotlib.pyplot as plt
+
+    if category_counts:
+        names = list(category_counts)
+        values = [category_counts[name] for name in names]
+        fig, ax = plt.subplots(figsize=(max(8, len(names) * 0.9), 4.8))
+        ax.bar(names, values, color="#6B8E23")
+        ax.set_ylabel("Applied proposal count")
+        ax.set_title("Emergent Proposal Categories")
+        ax.tick_params(axis="x", rotation=35)
+        fig.tight_layout()
+        path = out / "proposal_categories.png"
+        fig.savefig(path, dpi=160)
+        plt.close(fig)
+        paths["proposal_categories"] = str(path)
+
+    if kind_counts:
+        names = list(kind_counts)
+        values = [kind_counts[name] for name in names]
+        fig, ax = plt.subplots(figsize=(max(7, len(names) * 1.0), 4.8))
+        ax.bar(names, values, color="#B279A2")
+        ax.set_ylabel("Applied proposal count")
+        ax.set_title("Emergent Proposal Artifact Kinds")
+        ax.tick_params(axis="x", rotation=25)
+        fig.tight_layout()
+        path = out / "proposal_kinds.png"
+        fig.savefig(path, dpi=160)
+        plt.close(fig)
+        paths["proposal_kinds"] = str(path)
+
+    if paths:
+        existing_path = out / "plots.json"
+        existing: dict[str, str] = {}
+        if existing_path.exists():
+            try:
+                existing = json.loads(existing_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing = {}
+        existing.update(paths)
+        existing_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    return paths

@@ -2,7 +2,7 @@
 
 Replaces the 5-phase SWE-Evolve pipeline with a simpler 2-phase loop:
   1. Write minimal episodic memory from the failed attempt
-  2. Call evolver LLM to generate one targeted intervention (skill or prompt fragment)
+  2. Call evolver LLM to generate one targeted reusable intervention
 
 The evolver prompt encodes learnings from E02 experiments about what kinds of
 interventions actually help: methodology skills and concise behavioral nudges.
@@ -23,16 +23,19 @@ logger = logging.getLogger(__name__)
 
 
 GUIDED_SYNTHESIS_PROMPT = """\
-You are a SKILL CURATOR for a SWE-bench solving agent. Solvers propose skills \
-after completing tasks. Your job is to review these proposals and decide which \
-to ACCEPT, REJECT, or MERGE into the skill library.
+You are an INTERVENTION CURATOR for a SWE-bench solving agent. Solvers propose \
+reusable interventions after completing tasks. Your job is to review these \
+proposals and decide which to ACCEPT, REJECT, or MERGE into the workspace.
 
 ## Constraints
 
-- Each skill has a NAME, DESCRIPTION (one sentence — the only thing the agent \
-sees by default), and CONTENT (full procedure, loaded on demand via read_skill tool).
-- Skills should be GENERALIZABLE — useful across many future tasks, not specific to one bug.
-- You do NOT generate new skills yourself. You only curate what solvers propose.
+- Interventions may be skills, prompt fragments, tools, or compact memory notes.
+- Skills have a NAME, DESCRIPTION (one sentence — the only thing the agent sees \
+by default), and CONTENT (full procedure, loaded on demand via read_skill tool).
+- Tools must be complete Python source for a Strands tool and should automate a \
+safe deterministic helper, not a risky solving shortcut.
+- Interventions should be GENERALIZABLE — useful across many future tasks, not specific to one bug.
+- You do NOT generate new interventions yourself. You only curate what solvers propose.
 - Keep the library lean — MERGE overlapping skills, REJECT task-specific ones.
 
 ## Decision criteria
@@ -42,9 +45,9 @@ CONFIDENCE as the primary signal:
 - HIGH confidence proposals are likely based on genuine insight — lean towards ACCEPT
 - LOW confidence proposals may be from confused solvers — lean towards SKIP
 
-Solvers may propose ENHANCE (improve an existing skill) or NEW (add a new skill):
+Solvers may propose ENHANCE (improve an existing intervention) or NEW (add a new intervention):
 - ENHANCE proposals: if the enhancement adds value, ACCEPT it (replaces old version).
-- NEW proposals: FIRST check if it overlaps with ANY existing skill. If so, MERGE it \
+- NEW skill proposals: FIRST check if they overlap with ANY existing skill. If so, MERGE them \
 into the existing skill rather than adding a new one. The library should have FEW \
 broad skills, not MANY narrow ones. Only ACCEPT a truly new skill if it covers a \
 pattern no existing skill touches.
@@ -56,7 +59,7 @@ PREFER MERGE over ACCEPT. A library of 5-10 broad skills is better than 30 narro
 For each proposal, output ONE of:
 
 ACCEPT: <proposal_name>
-(the skill is added as-is to the library)
+(the intervention is added as-is to the workspace)
 
 MERGE: <proposal_name> INTO <existing_skill_name>
 NEW_CONTENT:
@@ -77,13 +80,13 @@ class GuidedSynthesisEngine(EvolutionEngine):
     """Memory-first evolution with LLM-guided synthesis."""
 
     VERIFICATION_CURATOR_PROMPT = """\
-You are a VERIFICATION SKILL CURATOR. Only accept skills about TESTING and VERIFYING fixes.
+You are a VERIFICATION INTERVENTION CURATOR. Only accept interventions about TESTING and VERIFYING fixes.
 
 IMPORTANT: Output your decisions FIRST, one per line. No analysis needed.
 
-Accept skills about: finding test files, writing repro scripts, before/after \
+Accept interventions about: finding test files, writing repro scripts, before/after \
 test comparison, edge case testing, detecting multi-file bugs.
-Reject skills about: finding code, writing patches, debugging logic.
+Reject interventions about: finding code, writing patches, debugging logic.
 
 Prefer MERGE — a few broad verification skills beat many narrow ones.
 
@@ -164,6 +167,7 @@ SKIP: <name>
                 parsed["confidence"] = confidence
                 parsed["action"] = action  # NEW or ENHANCE
                 parsed["target"] = target  # existing skill name (for ENHANCE)
+                parsed["target_slug"] = self._slug_name(target) if target else ""
                 parsed["analysis"] = analysis
                 parsed["source_task"] = obs.task.id
                 proposals.append(parsed)
@@ -192,8 +196,10 @@ SKIP: <name>
                 "proposal_details": [
                     {
                         "name": p.get("name", ""),
+                        "type": p.get("type", ""),
                         "action": p.get("action", ""),
                         "confidence": p.get("confidence", ""),
+                        "target": p.get("target", ""),
                         "source_task": p.get("source_task", ""),
                         "description": p.get("description", ""),
                     }
@@ -294,6 +300,8 @@ SKIP: <name>
         proposals: list[dict],
     ) -> str:
         existing_skills = [s.name for s in workspace.list_skills()]
+        existing_fragments = list(workspace.list_fragments())
+        existing_tools = [entry.get("name", "") for entry in workspace.read_tool_registry()]
 
         parts = ["## Current Skill Library"]
         if existing_skills:
@@ -309,12 +317,27 @@ SKIP: <name>
         else:
             parts.append("(empty — 0/7 slots used)")
 
+        parts.append("")
+        parts.append("## Current Non-Skill Interventions")
+        parts.append(
+            "Prompt fragments: "
+            + (", ".join(existing_fragments) if existing_fragments else "none")
+        )
+        parts.append(
+            "Workspace tools: "
+            + (", ".join(name for name in existing_tools if name) if existing_tools else "none")
+        )
+
         if proposals:
             parts.append("")
             parts.append("## Solver Proposals")
             for p in proposals:
                 action = p.get("action", "NEW")
-                parts.append(f"\n### {'ENHANCE' if action == 'ENHANCE' else 'NEW'}: {p['name']} (confidence: {p.get('confidence', '?')})")
+                ptype = p.get("type", "skill")
+                parts.append(
+                    f"\n### {'ENHANCE' if action == 'ENHANCE' else 'NEW'} "
+                    f"{ptype}: {p['name']} (confidence: {p.get('confidence', '?')})"
+                )
                 parts.append(f"Source: {p.get('source_task', '?')}")
                 if action == "ENHANCE":
                     parts.append(f"Target skill: {p.get('target', '?')}")
@@ -352,24 +375,31 @@ SKIP: <name>
         """Parse curation decisions and apply to workspace."""
         applied = []
         proposal_map = {p["name"]: p for p in proposals}
-        existing_skills = {s.name for s in workspace.list_skills()}
+        proposal_slug_map = {self._slug_name(p["name"]): p["name"] for p in proposals}
 
         def _fuzzy_match_proposal(name: str) -> str | None:
             """Match curator's name to actual proposal name (curator may truncate)."""
             if name in proposal_map:
                 return name
+            slug = self._slug_name(name)
+            if slug in proposal_slug_map:
+                return proposal_slug_map[slug]
             # Try prefix match
             for pname in proposal_map:
-                if pname.startswith(name) or name.startswith(pname):
+                pslug = self._slug_name(pname)
+                if pslug.startswith(slug) or slug.startswith(pslug):
                     return pname
             return None
 
         def _fuzzy_match_skill(name: str) -> str | None:
             """Match curator's name to actual skill name."""
+            existing_skills = {s.name for s in workspace.list_skills()}
             if name in existing_skills:
                 return name
+            slug = self._slug_name(name)
             for sname in existing_skills:
-                if sname.startswith(name) or name.startswith(sname):
+                sslug = self._slug_name(sname)
+                if sslug == slug or sslug.startswith(slug) or slug.startswith(sslug):
                     return sname
             return None
 
@@ -382,14 +412,11 @@ SKIP: <name>
             if label == "ACCEPT":
                 raw_name = line.split(":", 1)[1].strip()
                 name = _fuzzy_match_proposal(raw_name)
-                if name and name not in existing_skills:
-                    if len(existing_skills) < self.MAX_SKILLS:
-                        p = proposal_map[name]
-                        desc = p.get("description", p["content"][:100])[:150]  # cap description length
-                        workspace.write_skill(name, f"---\nname: {name}\ndescription: {desc}\n---\n\n{p['content']}")
-                        existing_skills.add(name)
-                        applied.append(f"accept:{name}")
-                        logger.info("Curated ACCEPT: %s", name)
+                if name:
+                    marker = self._apply_curated_proposal(workspace, proposal_map[name])
+                    if marker:
+                        applied.append(f"accept:{marker}")
+                        logger.info("Curated ACCEPT: %s", marker)
 
             elif label == "REPLACE":
                 # REPLACE: new_name REPLACES old_name
@@ -399,14 +426,15 @@ SKIP: <name>
                     new_name = _fuzzy_match_proposal(raw_new.strip())
                     old_name = _fuzzy_match_skill(raw_old.strip())
                     if new_name and old_name:
-                        workspace.delete_skill(old_name)
-                        existing_skills.discard(old_name)
                         p = proposal_map[new_name]
-                        desc = p.get("description", p["content"][:100])[:150]  # cap description length
-                        workspace.write_skill(new_name, f"---\nname: {new_name}\ndescription: {desc}\n---\n\n{p['content']}")
-                        existing_skills.add(new_name)
-                        applied.append(f"replace:{old_name}->{new_name}")
-                        logger.info("Curated REPLACE: %s -> %s", old_name, new_name)
+                        if p.get("type") == "skill":
+                            workspace.delete_skill(old_name)
+                            marker = self._apply_curated_proposal(workspace, p)
+                            if marker:
+                                applied.append(f"replace:{old_name}->{marker}")
+                                logger.info("Curated REPLACE: %s -> %s", old_name, marker)
+                        else:
+                            logger.info("Curated REPLACE skipped for non-skill proposal: %s", new_name)
 
             elif label == "MERGE":
                 # MERGE: proposal_name INTO existing_name
@@ -427,16 +455,19 @@ SKIP: <name>
                                     new_content = new_content[:new_content.index(marker)]
                             new_content = new_content.strip()
                             if new_content:
-                                old_skill = workspace.read_skill(target_name) or ""
-                                old_desc = ""
-                                for sl in old_skill.split("\n"):
-                                    if sl.startswith("description:"):
-                                        old_desc = sl.split(":", 1)[1].strip()
-                                        break
-                                workspace.write_skill(target_name,
-                                    f"---\nname: {target_name}\ndescription: {old_desc}\n---\n\n{new_content}")
-                                applied.append(f"merge:{prop_name}->{target_name}")
-                                logger.info("Curated MERGE: %s into %s", prop_name, target_name)
+                                proposal = dict(proposal_map[prop_name])
+                                proposal["type"] = "skill"
+                                proposal["name"] = target_name
+                                proposal["content"] = new_content
+                                marker = self._write_skill_intervention(
+                                    workspace,
+                                    target_name,
+                                    proposal,
+                                    replace_existing=True,
+                                )
+                                if marker:
+                                    applied.append(f"merge:{prop_name}->{target_name}")
+                                    logger.info("Curated MERGE: %s into %s", prop_name, target_name)
 
             elif label == "SKIP":
                 name = line.split(":", 1)[1].strip()
@@ -459,6 +490,177 @@ SKIP: <name>
         if match:
             return f"{match.group(1).upper()}: {match.group(2).strip()}"
         return text
+
+    @staticmethod
+    def _slug_name(value: str, *, default: str = "intervention", limit: int = 80) -> str:
+        """Canonical strategy name used for skills/fragments/memory."""
+        text = re.sub(r"[^a-zA-Z0-9]+", "-", str(value or "").strip().lower())
+        text = re.sub(r"-+", "-", text).strip("-")
+        return (text or default)[:limit].strip("-") or default
+
+    @staticmethod
+    def _tool_function_name(value: str, *, default: str = "evolved_tool") -> str:
+        name = re.sub(r"[^a-zA-Z0-9_]+", "_", str(value or "").strip().lower())
+        name = re.sub(r"_+", "_", name).strip("_")
+        if not name:
+            name = default
+        if not re.match(r"^[A-Za-z_]", name):
+            name = f"{default}_{name}"
+        return name[:80]
+
+    @staticmethod
+    def _strip_code_fence(content: str) -> str:
+        text = str(content or "").strip()
+        if text.startswith("```"):
+            fence_lines = text.split("\n")
+            if fence_lines and fence_lines[-1].strip() == "```":
+                text = "\n".join(fence_lines[1:-1]).strip()
+        return text
+
+    @staticmethod
+    def _normalize_intervention_type(value: str) -> str:
+        itype = str(value or "").strip().lower().replace("-", "_")
+        aliases = {
+            "prompt": "fragment",
+            "prompt_fragment": "fragment",
+            "fragment": "fragment",
+            "skill": "skill",
+            "tool": "tool",
+            "memory": "memory",
+            "memory_entry": "memory",
+        }
+        return aliases.get(itype, itype)
+
+    @staticmethod
+    def _content_validation_error(itype: str, content: str) -> str:
+        text = str(content or "").strip()
+        if not text:
+            return "empty content"
+        min_chars = {"fragment": 40, "memory": 30, "tool": 120}.get(itype, 120)
+        non_empty = [line.strip() for line in text.splitlines() if line.strip()]
+        if len(text) < min_chars or (itype in {"skill", "tool"} and len(non_empty) < 2):
+            return f"content too short for {itype}"
+        if text.count("```") % 2:
+            return "unclosed code fence"
+        last = non_empty[-1] if non_empty else ""
+        if re.match(r"^#{1,6}\s+.{0,18}$", last):
+            return "content ends at a heading"
+        if re.match(r"^(?:[-*]|\d+[.)])\s+\S{0,24}$", last):
+            return "content ends at an unfinished list item"
+        if re.search(r"\b(?:Rep|Repro|Inspect|Verif|Valid|Befor|Afte|Invest)\s*$", last, re.IGNORECASE):
+            return "content appears truncated"
+        if itype == "tool":
+            if "def " not in text:
+                return "tool content has no function definition"
+            if "@tool" not in text:
+                return "tool content is not a Strands @tool"
+        return ""
+
+    def _write_skill_intervention(
+        self,
+        workspace: Any,
+        name: str,
+        proposal: dict[str, Any],
+        *,
+        replace_existing: bool = False,
+    ) -> str:
+        skill_name = self._slug_name(name)
+        content = self._strip_code_fence(str(proposal.get("content") or ""))
+        error = self._content_validation_error("skill", content)
+        if error:
+            logger.warning("Skipping skill %s: %s", skill_name, error)
+            return ""
+        existing_by_slug = {self._slug_name(s.name): s.name for s in workspace.list_skills()}
+        existing_name = existing_by_slug.get(skill_name)
+        if existing_name and not replace_existing:
+            logger.info("Skill %s already exists as %s, skipping", skill_name, existing_name)
+            return ""
+        write_name = existing_name or skill_name
+        if not existing_name and len(existing_by_slug) >= self.MAX_SKILLS:
+            logger.info("Skill cap reached, skipping %s", skill_name)
+            return ""
+        desc = str(proposal.get("description") or content[:100]).replace("\n", " ").strip()[:150]
+        workspace.write_skill(write_name, f"---\nname: {write_name}\ndescription: {desc}\n---\n\n{content}")
+        return f"skill:{write_name}"
+
+    def _write_fragment_intervention(self, workspace: Any, name: str, proposal: dict[str, Any]) -> str:
+        fragment_name = self._slug_name(name)
+        content = self._strip_code_fence(str(proposal.get("content") or ""))
+        error = self._content_validation_error("fragment", content)
+        if error:
+            logger.warning("Skipping fragment %s: %s", fragment_name, error)
+            return ""
+        filename = f"{fragment_name}.md"
+        if filename in set(workspace.list_fragments()):
+            logger.info("Fragment %s already exists, skipping", fragment_name)
+            return ""
+        workspace.write_fragment(filename, content)
+        current_prompt = workspace.read_prompt()
+        marker = f"<!-- evolve:{fragment_name} -->"
+        if marker not in current_prompt:
+            injection = f"\n\n{marker}\n## {fragment_name.replace('-', ' ').title()}\n{content}\n"
+            workspace.write_prompt(current_prompt + injection)
+        return f"fragment:{fragment_name}"
+
+    def _write_tool_intervention(self, workspace: Any, name: str, proposal: dict[str, Any]) -> str:
+        tool_name = self._tool_function_name(name)
+        content = self._strip_code_fence(str(proposal.get("content") or ""))
+        error = self._content_validation_error("tool", content)
+        if error:
+            logger.warning("Skipping tool %s: %s", tool_name, error)
+            return ""
+        function_match = re.search(r"def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", content)
+        if function_match:
+            tool_name = function_match.group(1)
+        registry = workspace.read_tool_registry()
+        if any(entry.get("name") == tool_name for entry in registry):
+            logger.info("Tool %s already exists in registry, skipping", tool_name)
+            return ""
+        workspace.write_tool(tool_name, content)
+        registry.append({
+            "name": tool_name,
+            "file": f"{tool_name}.py",
+            "description": str(proposal.get("description") or "")[:180],
+        })
+        workspace.write_tool_registry(registry)
+        return f"tool:{tool_name}"
+
+    def _write_memory_intervention(self, workspace: Any, name: str, proposal: dict[str, Any]) -> str:
+        memory_name = self._slug_name(name)
+        content = self._strip_code_fence(str(proposal.get("content") or ""))
+        error = self._content_validation_error("memory", content)
+        if error:
+            logger.warning("Skipping memory %s: %s", memory_name, error)
+            return ""
+        workspace.add_memory(
+            {
+                "type": "evolved_strategy",
+                "name": memory_name,
+                "description": proposal.get("description", ""),
+                "content": content,
+            },
+            category="strategy",
+        )
+        return f"memory:{memory_name}"
+
+    def _apply_curated_proposal(self, workspace: Any, proposal: dict[str, Any]) -> str:
+        itype = self._normalize_intervention_type(str(proposal.get("type") or "skill"))
+        name = self._slug_name(str(proposal.get("name") or "intervention"))
+        if proposal.get("action") == "ENHANCE" and proposal.get("target"):
+            target = str(proposal.get("target") or "").strip()
+            if target:
+                name = self._slug_name(target)
+        if itype == "skill":
+            replace = bool(proposal.get("action") == "ENHANCE")
+            return self._write_skill_intervention(workspace, name, proposal, replace_existing=replace)
+        if itype == "fragment":
+            return self._write_fragment_intervention(workspace, name, proposal)
+        if itype == "tool":
+            return self._write_tool_intervention(workspace, name, proposal)
+        if itype == "memory":
+            return self._write_memory_intervention(workspace, name, proposal)
+        logger.warning("Unknown intervention type: %s", itype)
+        return ""
 
     # ── Legacy: failure context (still used for non-curation mode) ──
 
@@ -597,10 +799,14 @@ SKIP: <name>
 
         for line in lines:
             normalized = self._normalize_tagged_line(line)
-            tag_match = re.match(r"^(TYPE|NAME|DESCRIPTION|CONTENT)\s*:\s*(.*)$", normalized, flags=re.IGNORECASE)
+            tag_match = re.match(
+                r"^(TYPE|KIND|NAME|DESCRIPTION|CONTENT)\s*:\s*(.*)$",
+                normalized,
+                flags=re.IGNORECASE,
+            )
             tag = tag_match.group(1).upper() if tag_match else ""
             value = tag_match.group(2).strip() if tag_match else ""
-            if tag == "TYPE":
+            if tag in {"TYPE", "KIND"}:
                 itype = value.lower()
             elif tag == "NAME":
                 name = value
@@ -621,20 +827,14 @@ SKIP: <name>
             logger.debug("Raw response:\n%s", raw[:500])
             return None
 
-        if itype not in ("skill", "fragment"):
+        itype = self._normalize_intervention_type(itype)
+        if itype not in ("skill", "fragment", "tool", "memory"):
             logger.warning("Unknown intervention type: %s", itype)
             return None
 
         # Clean up name
-        name = re.sub(r"[^a-z0-9_]", "_", name.lower()).strip("_")
-
-        content = "\n".join(content_lines).strip()
-
-        # Strip markdown code fences if wrapped
-        if content.startswith("```"):
-            fence_lines = content.split("\n")
-            if fence_lines[-1].strip() == "```":
-                content = "\n".join(fence_lines[1:-1]).strip()
+        name = self._slug_name(name)
+        content = self._strip_code_fence("\n".join(content_lines))
 
         logger.info("Parsed intervention: type=%s name=%s desc=%s content_len=%d",
                     itype, name, description[:60], len(content))
@@ -718,47 +918,11 @@ SKIP: <name>
         workspace: Any,
         intervention: dict[str, str],
     ) -> bool:
-        itype = intervention["type"]
-        name = intervention["name"]
-        content = intervention["content"]
-
-        if itype == "skill":
-            # Check if already exists
-            existing = {s.name for s in workspace.list_skills()}
-            if name in existing:
-                logger.info("Skill %s already exists, skipping", name)
-                return False
-            desc = intervention.get("description", "")[:150]
-            if not desc:
-                # Fallback: extract first meaningful line
-                for line in content.split("\n"):
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        desc = line[:150]
-                        break
-            if not desc:
-                desc = content[:150].replace("\n", " ").strip()
-            skill_md = f"---\nname: {name}\ndescription: {desc}\n---\n\n{content}"
-            workspace.write_skill(name, skill_md)
-            logger.info("Applied skill: %s (%d chars)", name, len(content))
+        marker = self._apply_curated_proposal(workspace, dict(intervention))
+        if marker:
+            logger.info("Applied intervention: %s", marker)
             return True
 
-        elif itype == "fragment":
-            existing = set(workspace.list_fragments())
-            if f"{name}.md" in existing:
-                logger.info("Fragment %s already exists, skipping", name)
-                return False
-            workspace.write_fragment(f"{name}.md", content)
-            # Also inject into system prompt
-            current_prompt = workspace.read_prompt()
-            marker = f"<!-- evolve:{name} -->"
-            if marker not in current_prompt:
-                injection = f"\n\n{marker}\n## {name.replace('_', ' ').title()}\n{content}\n"
-                workspace.write_prompt(current_prompt + injection)
-            logger.info("Applied fragment: %s (%d chars)", name, len(content))
-            return True
-
-        logger.warning("Unknown intervention type: %s", itype)
         return False
 
     # ── Pruning ──────────────────────────────────────────────

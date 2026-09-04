@@ -2,12 +2,13 @@
 """Run cost-aware emergent efficiency experiments.
 
 This runner is intentionally separate from evolve_sequential.py.  The normal
-mode runs ordinary agent self-evolution.  The cost-aware mode runs that same
+mode runs ordinary agent self-evolution. The cost-aware mode runs that same
 self-evolution and then adds neutral cost/trajectory summaries so the evolver
-can write ordinary efficiency skills or prompt fragments.  It does not expose
-predefined EvoEfficient strategy names or candidate configs to the evolver.
-The predefined-cost-aware mode intentionally combines predefined runtime
-efficiency strategies with the same cost-aware proposer.
+can write reusable efficiency interventions. It does not expose predefined
+EvoEfficient strategy names or candidate configs to the evolver. The
+category-seeded mode adds only broad M1-M7 efficiency categories. The
+predefined-cost-aware mode intentionally combines predefined runtime efficiency
+strategies with the same cost-aware proposer.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from agent_evolve.efficiency.strategies import (
     write_active_config,
 )
 from agent_evolve.efficiency.visualization import (
+    write_proposal_category_plots,
     write_plots,
     write_strategy_library_plot,
     write_summary_table,
@@ -49,6 +51,71 @@ logger = logging.getLogger("emergent_efficiency")
 PREDEFINED_STRATEGY_NAMES = sorted(DEFAULT_STRATEGIES)
 DEFAULT_OUTPUT_ROOT = "logs/emergent_efficiency"
 
+CATEGORY_SEED_TAXONOMY: list[dict[str, str]] = [
+    {
+        "id": "M1",
+        "name": "Context",
+        "cost_dimension": "input tokens",
+        "observable_signals": "prompt/context length, max input tokens per turn, cache read/write",
+        "scope": "Context selection, compression, and retention of evidence that can change the patch decision.",
+    },
+    {
+        "id": "M2",
+        "name": "Reasoning",
+        "cost_dimension": "reasoning tokens",
+        "observable_signals": "reasoning budget when available; otherwise turns, reflection length, repeated analysis",
+        "scope": "Shorter reasoning loops, hypothesis convergence, and avoiding repeated analysis.",
+    },
+    {
+        "id": "M3",
+        "name": "Output",
+        "cost_dimension": "output tokens",
+        "observable_signals": "output tokens, long observations, long command output",
+        "scope": "Concise outputs, structured observation summaries, and less repeated printing.",
+    },
+    {
+        "id": "M4",
+        "name": "Planning",
+        "cost_dimension": "planning tokens / steps",
+        "observable_signals": "planning turns, plan updates, total step count",
+        "scope": "Plan templates, stage gates, and replanning after failed hypotheses.",
+    },
+    {
+        "id": "M5",
+        "name": "Tools",
+        "cost_dimension": "tool calls",
+        "observable_signals": "tool call count, repeated commands, same-test reruns without edits",
+        "scope": "Tool choice, batched probes, and repeated-command suppression.",
+    },
+    {
+        "id": "M6",
+        "name": "Compilation",
+        "cost_dimension": "steps / LLM calls",
+        "observable_signals": "read_skill calls, repeated skill/prompt loading, LLM calls",
+        "scope": "Skill or memory compilation, compact task playbooks, and reusable knowledge summaries.",
+    },
+    {
+        "id": "M7",
+        "name": "Routing",
+        "cost_dimension": "cost per call",
+        "observable_signals": "main/easy/hard model cost, route model cost",
+        "scope": "Difficulty judgment, cheap-model prescreening, and reserving expensive calls for key decisions.",
+    },
+]
+
+CATEGORY_LABELS = {
+    f"{item['id']} {item['name']}": item
+    for item in CATEGORY_SEED_TAXONOMY
+}
+CATEGORY_ALIASES = {
+    item["id"].lower(): f"{item['id']} {item['name']}"
+    for item in CATEGORY_SEED_TAXONOMY
+}
+CATEGORY_ALIASES.update({
+    item["name"].lower(): f"{item['id']} {item['name']}"
+    for item in CATEGORY_SEED_TAXONOMY
+})
+
 
 EMERGENCE_SYSTEM_PROMPT = """\
 You are an experiment assistant for a SWE-bench solving agent.
@@ -56,20 +123,21 @@ You are an experiment assistant for a SWE-bench solving agent.
 Goal: discover cost-saving behavior changes from evidence, without using any
 named predefined strategy library.
 
-You may propose ordinary reusable skills or short prompt fragments.  Each
-proposal must preserve correctness first.  Avoid shortcuts that merely stop
-early, skip investigation, or reduce validation.
+You may propose ordinary reusable skills, short prompt fragments, compact
+memory notes, or deterministic Strands tools.  Each proposal must preserve
+correctness first.  Avoid shortcuts that merely stop early, skip investigation,
+or reduce validation.
 
 Output JSON only:
 {
   "proposals": [
     {
       "name": "short_generic_name",
-      "kind": "skill" | "prompt_fragment",
+      "kind": "skill" | "prompt_fragment" | "tool" | "memory",
       "description": "one sentence with trigger and do-not-trigger conditions",
       "trigger": "when to use it",
       "do_not_trigger": "when not to use it",
-      "content": "concrete reusable procedure, under 350 words",
+      "content": "procedure under 350 words, or complete Strands @tool Python source for kind=tool",
       "expected_savings": "why this should reduce cost",
       "correctness_risk": "what could go wrong",
       "confidence": "HIGH" | "MEDIUM" | "LOW",
@@ -89,21 +157,22 @@ Goal: discover incremental cost-saving behavior changes from evidence while
 predefined runtime efficiency strategies are already active.
 
 You may refer to active predefined strategies only to explain what is already
-covered. Propose ordinary reusable skills or short prompt fragments only when
-they add behavior not already covered by the active strategy set. Each proposal
-must preserve correctness first. Avoid shortcuts that merely stop early, skip
-investigation, or reduce validation.
+covered. Propose ordinary reusable skills, short prompt fragments, compact
+memory notes, or deterministic Strands tools only when they add behavior not
+already covered by the active strategy set. Each proposal must preserve
+correctness first. Avoid shortcuts that merely stop early, skip investigation,
+or reduce validation.
 
 Output JSON only:
 {
   "proposals": [
     {
       "name": "short_generic_name",
-      "kind": "skill" | "prompt_fragment",
+      "kind": "skill" | "prompt_fragment" | "tool" | "memory",
       "description": "one sentence with trigger and do-not-trigger conditions",
       "trigger": "when to use it",
       "do_not_trigger": "when not to use it",
-      "content": "concrete reusable procedure, under 350 words",
+      "content": "procedure under 350 words, or complete Strands @tool Python source for kind=tool",
       "expected_savings": "why this should reduce cost beyond active strategies",
       "correctness_risk": "what could go wrong",
       "confidence": "HIGH" | "MEDIUM" | "LOW",
@@ -116,10 +185,126 @@ Return {"proposals": []} when there is no cross-task incremental pattern.
 """
 
 
+CATEGORY_SEEDED_SYSTEM_PROMPT = """\
+You are an experiment assistant for a SWE-bench solving agent.
+
+Goal: discover concrete cost-saving behavior changes from evidence. You are
+given only broad efficiency categories, not predefined strategy names or
+implementations. Use the categories as weak labels for cost dimensions; do not
+treat them as ready-made strategies.
+
+Each proposal must preserve correctness first. Avoid shortcuts that merely stop
+early, skip investigation, or reduce validation. Propose a tool only when it is
+a deterministic, safe helper whose complete Strands @tool Python source can be
+written in the content field.
+
+Output JSON only:
+{
+  "proposals": [
+    {
+      "name": "short_generic_name",
+      "kind": "skill" | "prompt_fragment" | "tool" | "memory",
+      "categories": ["M5 Tools", "M4 Planning"],
+      "description": "one sentence with trigger and do-not-trigger conditions",
+      "trigger": "when to use it",
+      "do_not_trigger": "when not to use it",
+      "content": "procedure under 350 words, or complete Strands @tool Python source for kind=tool",
+      "expected_savings": "which category metric should improve and why",
+      "correctness_risk": "what could go wrong",
+      "confidence": "HIGH" | "MEDIUM" | "LOW",
+      "evidence": ["task_id: observed waste -> proposed fix"]
+    }
+  ]
+}
+
+Return {"proposals": []} when there is no cross-task efficiency pattern.
+"""
+
+
 def _slug(value: str, *, default: str = "proposal", limit: int = 80) -> str:
     text = re.sub(r"[^a-zA-Z0-9_]+", "_", str(value).strip().lower())
     text = re.sub(r"_+", "_", text).strip("_")
     return (text or default)[:limit]
+
+
+def _normalize_kind(value: str) -> str:
+    kind = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "prompt": "prompt_fragment",
+        "fragment": "prompt_fragment",
+        "prompt_fragment": "prompt_fragment",
+        "skill": "skill",
+        "tool": "tool",
+        "memory": "memory",
+        "memory_entry": "memory",
+    }
+    return aliases.get(kind, kind)
+
+
+def _tool_function_name(value: str, *, default: str = "emergent_tool") -> str:
+    name = _slug(value, default=default)
+    if not re.match(r"^[A-Za-z_]", name):
+        name = f"{default}_{name}"
+    return name[:80]
+
+
+def _strip_code_fence(content: str) -> str:
+    text = str(content or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[-1].strip() == "```":
+            text = "\n".join(lines[1:-1]).strip()
+    return text
+
+
+def _tool_validation_error(content: str) -> str:
+    text = str(content or "").strip()
+    if len(text) < 120:
+        return "tool content too short"
+    if "def " not in text:
+        return "tool content has no function definition"
+    if "@tool" not in text:
+        return "tool content is not a Strands @tool"
+    return ""
+
+
+def _category_taxonomy_payload() -> list[dict[str, str]]:
+    return [
+        {
+            "category": f"{item['id']} {item['name']}",
+            "cost_dimension": item["cost_dimension"],
+            "observable_signals": item["observable_signals"],
+            "scope": item["scope"],
+        }
+        for item in CATEGORY_SEED_TAXONOMY
+    ]
+
+
+def _normalize_categories(value: Any) -> list[str]:
+    if value is None:
+        return []
+    values = value if isinstance(value, list) else [value]
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        compact = re.sub(r"\s+", " ", text)
+        key = compact.lower()
+        match = re.match(r"^(m[1-7])(?:\s+(.+))?$", key)
+        if match:
+            normalized = CATEGORY_ALIASES.get(match.group(1), compact)
+        else:
+            normalized = CATEGORY_ALIASES.get(key, compact)
+        if normalized in CATEGORY_LABELS and normalized not in seen:
+            seen.add(normalized)
+            out.append(normalized)
+    return out
+
+
+def _proposal_categories(proposal: dict[str, Any]) -> list[str]:
+    return _normalize_categories(proposal.get("categories") or proposal.get("category"))
 
 
 def _json_default(value: Any) -> str:
@@ -505,7 +690,7 @@ def _waste_signals(result: dict[str, Any], *, max_steps: int) -> dict[str, Any]:
         action_counts[action] = action_counts.get(action, 0) + 1
         key = f"{action}:{str(step.get('input_summary', ''))[:120]}"
         repeated[key] = repeated.get(key, 0) + 1
-        if action in {"edit", "write", "submit"} or step.get("tool") in {"text_editor", "submit"}:
+        if _is_edit_step(step):
             edited_at.append(index + 1)
     repeated_top = [
         {"signature": key[:180], "count": count}
@@ -513,12 +698,19 @@ def _waste_signals(result: dict[str, Any], *, max_steps: int) -> dict[str, Any]:
         if count >= 2
     ][:5]
     last_edit_step = max(edited_at) if edited_at else 0
+    behavior_stats = _behavior_hit_stats(result)
     return {
         "task_id": result.get("instance_id", ""),
         "success": bool(result.get("success")),
         "score": result.get("score", 0.0),
         "cost_units": round(_safe_float(result.get("cost_units")), 2),
         "total_tokens": _safe_int(result.get("total_tokens")),
+        "input_tokens": _safe_int(result.get("cumulative_input_tokens")),
+        "output_tokens": _safe_int(result.get("cumulative_output_tokens")),
+        "cache_read_input_tokens": _safe_int(result.get("cumulative_cache_read_input_tokens")),
+        "cache_write_input_tokens": _safe_int(result.get("cumulative_cache_write_input_tokens")),
+        "main_model_cost_units": round(_safe_float(result.get("main_cost_units")), 4),
+        "route_model_cost_units": round(_safe_float(result.get("route_model_cost_units")), 4),
         "tool_calls": _safe_int(result.get("num_tool_calls")),
         "turns": _safe_int(result.get("num_turns")),
         "max_input_tokens_per_turn": _safe_int(result.get("max_input_tokens_per_turn")),
@@ -527,7 +719,125 @@ def _waste_signals(result: dict[str, Any], *, max_steps: int) -> dict[str, Any]:
         "last_edit_step": last_edit_step,
         "action_counts": action_counts,
         "repeated_actions": repeated_top,
+        "behavior_stats": {
+            "prompt_fragment_visible": behavior_stats.get("prompt_fragment_visible"),
+            "repeated_exact_inputs": behavior_stats.get("repeated_exact_inputs"),
+            "repeated_test_inputs": behavior_stats.get("repeated_test_inputs"),
+            "same_state_repeated_tests": behavior_stats.get("same_state_repeated_tests"),
+            "post_edit_repeated_tests": behavior_stats.get("post_edit_repeated_tests"),
+            "prompt_fragment_violation_events": behavior_stats.get("prompt_fragment_violation_events"),
+        },
         "error": str(result.get("error") or "")[:240],
+    }
+
+
+def _step_action(step: dict[str, Any]) -> str:
+    return str(step.get("action") or step.get("tool") or "").strip().lower()
+
+
+def _step_signature(step: dict[str, Any]) -> str:
+    action = _step_action(step)
+    summary = str(step.get("input_summary") or step.get("input") or "")[:180].strip()
+    return f"{action}:{summary}"
+
+
+def _is_edit_step(step: dict[str, Any]) -> bool:
+    action = _step_action(step)
+    tool = str(step.get("tool") or "").strip().lower()
+    if action in {"edit_file", "write_file", "edit", "write"}:
+        return True
+    return tool == "text_editor" and action not in {"read_file", "view", "search", "submit"}
+
+
+def _is_test_step(step: dict[str, Any]) -> bool:
+    action = _step_action(step)
+    haystack = " ".join(
+        str(step.get(key) or "")
+        for key in ("input_summary", "input", "command", "args")
+    ).lower()
+    return action in {"run_test", "test"} or any(
+        marker in haystack
+        for marker in ("pytest", "tox ", " unittest", "manage.py test", "npm test")
+    )
+
+
+def _prompt_fragment_visible(result: dict[str, Any]) -> bool:
+    prompt_text = str(result.get("system_prompt") or "")
+    prompt_path = str(result.get("system_prompt_path") or "")
+    if prompt_path:
+        path = Path(prompt_path)
+        if path.exists():
+            try:
+                prompt_text = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                pass
+    return "emergent_efficiency_proposal:" in prompt_text or "<!-- evolve:" in prompt_text
+
+
+def _behavior_hit_stats(result: dict[str, Any]) -> dict[str, Any]:
+    """Track whether behavioral prompt fragments appear to be obeyed or missed."""
+    tool_steps = [
+        step for step in result.get("steps", [])
+        if isinstance(step, dict) and "tool" in step
+    ]
+    seen: dict[str, int] = {}
+    test_seen_at_edit_version: dict[str, int] = {}
+    edit_version = 0
+    repeated_exact_inputs = 0
+    repeated_test_inputs = 0
+    same_state_repeated_tests = 0
+    post_edit_repeated_tests = 0
+    duplicate_examples: list[dict[str, Any]] = []
+
+    for index, step in enumerate(tool_steps, start=1):
+        if _is_edit_step(step):
+            edit_version += 1
+        signature = _step_signature(step)
+        previous = seen.get(signature, 0)
+        if previous:
+            repeated_exact_inputs += 1
+            if len(duplicate_examples) < 5:
+                duplicate_examples.append({
+                    "step": index,
+                    "signature": signature[:220],
+                    "previous_count": previous,
+                })
+        seen[signature] = previous + 1
+
+        if not _is_test_step(step):
+            continue
+        if signature in test_seen_at_edit_version:
+            repeated_test_inputs += 1
+            if test_seen_at_edit_version[signature] == edit_version:
+                same_state_repeated_tests += 1
+            else:
+                post_edit_repeated_tests += 1
+        test_seen_at_edit_version[signature] = edit_version
+
+    fragment_visible = _prompt_fragment_visible(result)
+    return {
+        "task_id": result.get("instance_id", ""),
+        "prompt_fragment_visible": fragment_visible,
+        "repeated_exact_inputs": repeated_exact_inputs,
+        "repeated_test_inputs": repeated_test_inputs,
+        "same_state_repeated_tests": same_state_repeated_tests,
+        "post_edit_repeated_tests": post_edit_repeated_tests,
+        "prompt_fragment_violation_events": same_state_repeated_tests if fragment_visible else 0,
+        "duplicate_examples": duplicate_examples,
+    }
+
+
+def _summarize_behavior_stats(results: list[dict[str, Any]]) -> dict[str, Any]:
+    stats = [r.get("behavior_stats") or _behavior_hit_stats(r) for r in results]
+    return {
+        "prompt_fragment_visible_tasks": sum(1 for item in stats if item.get("prompt_fragment_visible")),
+        "repeated_exact_inputs": sum(_safe_int(item.get("repeated_exact_inputs")) for item in stats),
+        "repeated_test_inputs": sum(_safe_int(item.get("repeated_test_inputs")) for item in stats),
+        "same_state_repeated_tests": sum(_safe_int(item.get("same_state_repeated_tests")) for item in stats),
+        "post_edit_repeated_tests": sum(_safe_int(item.get("post_edit_repeated_tests")) for item in stats),
+        "prompt_fragment_violation_events": sum(
+            _safe_int(item.get("prompt_fragment_violation_events")) for item in stats
+        ),
     }
 
 
@@ -537,6 +847,7 @@ def _build_cost_feedback(
     batch_num: int,
     max_steps: int,
     allow_predefined: bool = False,
+    include_category_seed: bool = False,
 ) -> str:
     summary = summarize_results(batch_results)
     signals = [_waste_signals(result, max_steps=max_steps) for result in batch_results]
@@ -559,9 +870,17 @@ def _build_cost_feedback(
             "success": summary.get("success"),
             "success_rate": summary.get("success_rate"),
             "avg_tokens": summary.get("avg_tokens"),
+            "avg_tokens_success": summary.get("avg_tokens_success"),
             "avg_cost": summary.get("avg_cost"),
+            "avg_cost_success": summary.get("avg_cost_success"),
             "cost_of_pass": summary.get("cost_of_pass"),
             "avg_tool_calls": summary.get("avg_tool_calls"),
+            "cache_read_input_tokens": summary.get("cache_read_input_tokens"),
+            "cache_write_input_tokens": summary.get("cache_write_input_tokens"),
+            "main_model_cost": summary.get("main_model_cost"),
+            "route_model_cost": summary.get("route_model_cost"),
+            "easy_model_cost": summary.get("easy_model_cost"),
+            "hard_model_cost": summary.get("hard_model_cost"),
             "zero_token_tasks": summary.get("zero_token_tasks"),
             "estimated_usage_tasks": summary.get("estimated_usage_tasks"),
             "token_record_quality": summary.get("token_record_quality"),
@@ -579,6 +898,14 @@ def _build_cost_feedback(
     }
     if allow_predefined:
         payload["active_predefined_strategies"] = active_predefined
+    if include_category_seed:
+        payload["efficiency_category_taxonomy"] = _category_taxonomy_payload()
+        payload["instructions"] = (
+            "Infer concrete reusable behaviors from the task signals. Use the M1-M7 "
+            "categories only as broad cost-dimension labels. Do not refer to any "
+            "predefined strategy registry, candidate list, strategy id, prompt block, "
+            "or gate implementation. Each proposal must include a categories list."
+        )
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
@@ -650,6 +977,71 @@ def _load_proposer_llm(args: argparse.Namespace):
     return create_default_llm(config)
 
 
+def _complete_proposer_with_retries(
+    llm: Any,
+    messages: list[LLMMessage],
+    *,
+    max_tokens: int,
+    temperature: float,
+    retries: int,
+    initial_delay: float,
+    max_delay: float,
+) -> tuple[str, dict[str, Any]]:
+    """Call the proposer LLM with bounded retries and return raw text + metadata."""
+    retry_count = max(0, int(retries))
+    max_attempts = retry_count + 1
+    delay = max(0.0, float(initial_delay))
+    delay_cap = max(delay, float(max_delay))
+    errors: list[dict[str, Any]] = []
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = llm.complete(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            return str(response.content or ""), {
+                "status": "ok",
+                "attempts": attempt,
+                "max_attempts": max_attempts,
+                "errors": errors,
+            }
+        except Exception as exc:
+            error = {
+                "attempt": attempt,
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+            errors.append(error)
+            if attempt >= max_attempts:
+                logger.error(
+                    "Proposer LLM call failed after %d attempt(s): %s: %s",
+                    attempt,
+                    error["type"],
+                    error["message"],
+                )
+                break
+            sleep_for = min(delay_cap, delay * (2 ** (attempt - 1))) if delay else 0.0
+            logger.warning(
+                "Proposer LLM call failed on attempt %d/%d; retrying in %.1fs: %s: %s",
+                attempt,
+                max_attempts,
+                sleep_for,
+                error["type"],
+                error["message"],
+            )
+            if sleep_for:
+                time.sleep(sleep_for)
+
+    return "", {
+        "status": "failed",
+        "attempts": max_attempts,
+        "max_attempts": max_attempts,
+        "errors": errors,
+    }
+
+
 def propose_emergent_efficiency(
     *,
     batch_results: list[dict[str, Any]],
@@ -658,11 +1050,16 @@ def propose_emergent_efficiency(
     args: argparse.Namespace,
 ) -> dict[str, Any]:
     allow_predefined = args.mode == "predefined-cost-aware"
+    include_category_seed = (
+        args.mode == "category-seeded-cost-aware"
+        and getattr(args, "category_seed", "basic-efficiency") == "basic-efficiency"
+    )
     feedback = _build_cost_feedback(
         batch_results,
         batch_num=batch_num,
         max_steps=max_steps,
         allow_predefined=allow_predefined,
+        include_category_seed=include_category_seed,
     )
     if args.dry_run_proposer:
         raw = json.dumps(
@@ -681,33 +1078,49 @@ def propose_emergent_efficiency(
                         "expected_savings": "reduces repeated broad exploration",
                         "correctness_risk": "may skip useful context if applied too early",
                         "confidence": "MEDIUM",
+                        "categories": ["M5 Tools"] if include_category_seed else [],
                         "evidence": [f"batch {batch_num}: dry-run placeholder"],
                     }
                 ]
             },
             ensure_ascii=False,
         )
+        proposer_call = {
+            "status": "dry_run",
+            "attempts": 0,
+            "max_attempts": 0,
+            "errors": [],
+        }
     else:
         llm = _load_proposer_llm(args)
-        response = llm.complete(
+        raw, proposer_call = _complete_proposer_with_retries(
+            llm,
             [
                 LLMMessage(
                     role="system",
                     content=(
                         PREDEFINED_COST_AWARE_SYSTEM_PROMPT
                         if allow_predefined
-                        else EMERGENCE_SYSTEM_PROMPT
+                        else (
+                            CATEGORY_SEEDED_SYSTEM_PROMPT
+                            if include_category_seed
+                            else EMERGENCE_SYSTEM_PROMPT
+                        )
                     ),
                 ),
                 LLMMessage(role="user", content=feedback),
             ],
             max_tokens=args.evolver_max_tokens,
             temperature=args.evolver_temperature,
+            retries=args.evolver_call_retries,
+            initial_delay=args.evolver_retry_initial_delay,
+            max_delay=args.evolver_retry_max_delay,
         )
-        raw = str(response.content or "")
 
     parsed = _extract_json_object(raw)
     parse_status = "parsed" if parsed else ("empty_response" if not raw.strip() else "parse_failed")
+    if proposer_call.get("status") == "failed":
+        parse_status = "llm_call_failed"
     recovered_count = 0
     if not parsed and raw.strip():
         recovered = _recover_proposals_from_partial_json(raw)
@@ -721,9 +1134,13 @@ def propose_emergent_efficiency(
         parse_status = "invalid_proposals_field"
     return {
         "batch": batch_num,
+        "mode": args.mode,
+        "category_seeded": include_category_seed,
+        "category_taxonomy": _category_taxonomy_payload() if include_category_seed else [],
         "raw_response": raw,
         "feedback": feedback,
         "parse_status": parse_status,
+        "proposer_call": proposer_call,
         "recovered_proposals": recovered_count,
         "proposals": [p for p in proposals if isinstance(p, dict)],
     }
@@ -744,16 +1161,33 @@ def _apply_proposals(
     workspace = AgentWorkspace(workspace_dir)
     applied: list[dict[str, Any]] = []
     proposals = proposal_report.get("proposals", []) or []
+    category_seeded = bool(proposal_report.get("category_seeded"))
     for index, proposal in enumerate(proposals[: max(0, max_apply)], start=1):
         confidence = str(proposal.get("confidence") or "MEDIUM").upper()
+        categories = _proposal_categories(proposal)
+        category_status = "ok"
+        if category_seeded and not categories:
+            category_status = "missing_categories"
         if confidence == "LOW":
-            applied.append({"index": index, "status": "skipped_low_confidence", "proposal": proposal})
+            applied.append({
+                "index": index,
+                "status": "skipped_low_confidence",
+                "categories": categories,
+                "category_status": category_status,
+                "proposal": proposal,
+            })
             continue
         name = _slug(str(proposal.get("name") or f"proposal_{index}"), default=f"proposal_{index}")
-        kind = str(proposal.get("kind") or "skill").strip().lower()
-        content = str(proposal.get("content") or "").strip()
+        kind = _normalize_kind(str(proposal.get("kind") or "skill"))
+        content = _strip_code_fence(str(proposal.get("content") or ""))
         if not content:
-            applied.append({"index": index, "status": "skipped_empty_content", "proposal": proposal})
+            applied.append({
+                "index": index,
+                "status": "skipped_empty_content",
+                "categories": categories,
+                "category_status": category_status,
+                "proposal": proposal,
+            })
             continue
         leaked_names = _proposal_contains_predefined_name(proposal)
         description = str(proposal.get("description") or proposal.get("trigger") or content[:120]).strip()
@@ -764,11 +1198,12 @@ def _apply_proposals(
                 filename,
                 (
                     f"<!-- emergent_efficiency_proposal: {proposal_id} -->\n"
+                    f"<!-- categories: {', '.join(categories) if categories else 'none'} -->\n"
                     f"{content.strip()}\n"
                 ),
             )
             target = f"prompts/fragments/{filename}"
-        else:
+        elif kind == "skill":
             skill_name = proposal_id
             workspace.write_skill(
                 skill_name,
@@ -778,6 +1213,7 @@ def _apply_proposals(
                     f"description: {description[:180]}\n"
                     "---\n\n"
                     "# Emergent Efficiency Skill\n\n"
+                    f"Categories: {', '.join(categories) if categories else 'none'}\n\n"
                     f"Trigger: {proposal.get('trigger', '')}\n\n"
                     f"Do not trigger: {proposal.get('do_not_trigger', '')}\n\n"
                     f"{content.strip()}\n\n"
@@ -786,11 +1222,76 @@ def _apply_proposals(
                 ),
             )
             target = f"skills/{skill_name}/SKILL.md"
+        elif kind == "tool":
+            validation_error = _tool_validation_error(content)
+            if validation_error:
+                applied.append({
+                    "index": index,
+                    "status": f"skipped_invalid_tool:{validation_error}",
+                    "kind": kind,
+                    "categories": categories,
+                    "category_status": category_status,
+                    "proposal": proposal,
+                })
+                continue
+            function_match = re.search(r"def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", content)
+            tool_name = function_match.group(1) if function_match else _tool_function_name(proposal_id)
+            registry = workspace.read_tool_registry()
+            if any(entry.get("name") == tool_name for entry in registry):
+                applied.append({
+                    "index": index,
+                    "status": "skipped_duplicate_tool",
+                    "proposal_id": proposal_id,
+                    "kind": kind,
+                    "categories": categories,
+                    "category_status": category_status,
+                    "target": f"tools/{tool_name}.py",
+                    "proposal": proposal,
+                })
+                continue
+            workspace.write_tool(tool_name, content)
+            registry.append({
+                "name": tool_name,
+                "file": f"{tool_name}.py",
+                "description": description[:180],
+            })
+            workspace.write_tool_registry(registry)
+            target = f"tools/{tool_name}.py"
+        elif kind == "memory":
+            workspace.add_memory(
+                {
+                    "type": "emergent_efficiency_strategy",
+                    "name": proposal_id,
+                    "description": description[:180],
+                    "categories": categories,
+                    "trigger": proposal.get("trigger", ""),
+                    "do_not_trigger": proposal.get("do_not_trigger", ""),
+                    "content": content.strip(),
+                    "expected_savings": proposal.get("expected_savings", ""),
+                    "correctness_risk": proposal.get("correctness_risk", ""),
+                    "confidence": confidence,
+                    "evidence": proposal.get("evidence", []),
+                },
+                category="strategy",
+            )
+            target = "memory/strategy.jsonl"
+        else:
+            applied.append({
+                "index": index,
+                "status": f"skipped_unknown_kind:{kind}",
+                "kind": kind,
+                "categories": categories,
+                "category_status": category_status,
+                "proposal": proposal,
+            })
+            continue
         record = {
             "index": index,
             "status": "applied",
             "proposal_id": proposal_id,
             "kind": kind,
+            "categories": categories,
+            "category_status": category_status,
             "target": target,
             "confidence": confidence,
             "predefined_name_hits": leaked_names,
@@ -814,6 +1315,11 @@ def _apply_proposals(
 def _write_proposals(output_dir: Path, report: dict[str, Any]) -> None:
     emergence_dir = output_dir / "emergence"
     emergence_dir.mkdir(parents=True, exist_ok=True)
+    if report.get("category_seeded"):
+        (emergence_dir / "category_taxonomy.json").write_text(
+            json.dumps(_category_taxonomy_payload(), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
     jsonl = emergence_dir / "proposals.jsonl"
     with jsonl.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(report, ensure_ascii=False, default=_json_default) + "\n")
@@ -821,12 +1327,73 @@ def _write_proposals(output_dir: Path, report: dict[str, Any]) -> None:
     latest.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _read_proposal_adoptions(output_dir: Path) -> list[dict[str, Any]]:
+    path = output_dir / "emergence" / "proposal_adoption.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _summarize_proposal_categories(adoptions: list[dict[str, Any]]) -> dict[str, Any]:
+    category_counts: dict[str, int] = {}
+    applied_category_counts: dict[str, int] = {}
+    kind_counts: dict[str, int] = {}
+    applied_kind_counts: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+    missing_category_records = 0
+    for record in adoptions:
+        status = str(record.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        proposal = record.get("proposal", {}) if isinstance(record.get("proposal"), dict) else {}
+        categories = _normalize_categories(record.get("categories") or proposal.get("categories"))
+        if record.get("category_status") == "missing_categories":
+            missing_category_records += 1
+        kind = _normalize_kind(str(record.get("kind") or proposal.get("kind") or "unknown"))
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+        if status == "applied":
+            applied_kind_counts[kind] = applied_kind_counts.get(kind, 0) + 1
+        for category in categories:
+            category_counts[category] = category_counts.get(category, 0) + 1
+            if status == "applied":
+                applied_category_counts[category] = applied_category_counts.get(category, 0) + 1
+    return {
+        "total_records": len(adoptions),
+        "status_counts": status_counts,
+        "kind_counts": kind_counts,
+        "applied_kind_counts": applied_kind_counts,
+        "category_counts": category_counts,
+        "applied_category_counts": applied_category_counts,
+        "missing_category_records": missing_category_records,
+    }
+
+
+def _write_proposal_category_outputs(output_dir: Path) -> None:
+    adoptions = _read_proposal_adoptions(output_dir)
+    if not adoptions:
+        return
+    emergence_dir = output_dir / "emergence"
+    emergence_dir.mkdir(parents=True, exist_ok=True)
+    summary = _summarize_proposal_categories(adoptions)
+    (emergence_dir / "proposal_category_summary.json").write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False, default=_json_default),
+        encoding="utf-8",
+    )
+    try:
+        write_proposal_category_plots(adoptions, output_dir / "figures")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to render proposal category figures: %s", exc)
+
+
 def _record_workspace_snapshot(workspace_dir: Path, output_dir: Path, batch_num: int) -> None:
     snapshot_dir = output_dir / "emergence" / "workspace_snapshots" / f"after_batch_{batch_num:02d}"
     if snapshot_dir.exists():
         shutil.rmtree(snapshot_dir)
     snapshot_dir.parent.mkdir(parents=True, exist_ok=True)
-    for rel_name in ("prompts", "skills", "memory"):
+    for rel_name in ("prompts", "skills", "tools", "memory"):
         src = workspace_dir / rel_name
         if src.exists():
             shutil.copytree(src, snapshot_dir / rel_name)
@@ -1049,6 +1616,7 @@ def _solve_batch(
                 )
             result["batch"] = batch_num
             result["mode"] = args.mode
+            result["behavior_stats"] = _behavior_hit_stats(result)
             results.append(result)
             status = "PASS" if result.get("success") else "FAIL"
             print(
@@ -1083,9 +1651,11 @@ def _make_summary_rows(results: list[dict[str, Any]], *, mode: str) -> list[dict
         batch_results = [r for r in results if _safe_int(r.get("batch")) == batch]
         row = {"group": f"{mode}_batch_{batch:02d}", "strategies": strategies_for(batch_results)}
         row.update(summarize_results(batch_results))
+        row.update(_summarize_behavior_stats(batch_results))
         rows.append(row)
     overall = {"group": f"{mode}_overall", "strategies": strategies_for(results)}
     overall.update(summarize_results(results))
+    overall.update(_summarize_behavior_stats(results))
     rows.append(overall)
     return rows
 
@@ -1099,10 +1669,22 @@ def _write_run_outputs(output_dir: Path, results: list[dict[str, Any]], *, mode:
     rows = _make_summary_rows(results, mode=mode)
     payload = {"mode": mode, "overall": rows[-1], "by_batch": rows[:-1]}
     (output_dir / "summary.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    behavior_payload = {
+        "overall": _summarize_behavior_stats(results),
+        "by_task": [
+            result.get("behavior_stats") or _behavior_hit_stats(result)
+            for result in results
+        ],
+    }
+    (output_dir / "behavior_stats.json").write_text(
+        json.dumps(behavior_payload, indent=2, ensure_ascii=False, default=_json_default),
+        encoding="utf-8",
+    )
     write_summary_table(rows, output_dir / "summary.csv")
     try:
         write_plots(rows, output_dir / "figures")
         write_strategy_library_plot(rows, output_dir / "figures")
+        _write_proposal_category_outputs(output_dir)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to render figures: %s", exc)
 
@@ -1111,7 +1693,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Emergent efficiency SWE experiment runner")
     parser.add_argument(
         "--mode",
-        choices=["normal-evolve", "cost-aware", "predefined-control", "predefined-cost-aware"],
+        choices=[
+            "normal-evolve",
+            "cost-aware",
+            "predefined-control",
+            "predefined-cost-aware",
+            "category-seeded-cost-aware",
+        ],
         default="cost-aware",
     )
     parser.add_argument("--batch-size", type=int, default=2)
@@ -1141,11 +1729,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--evolver-model", default="")
     parser.add_argument("--region", default="us-west-2")
     parser.add_argument("--max-tokens", type=int, default=16384)
-    parser.add_argument("--evolver-max-tokens", type=int, default=4096)
+    parser.add_argument("--evolver-max-tokens", type=int, default=8192)
     parser.add_argument("--evolver-temperature", type=float, default=0.2)
+    parser.add_argument(
+        "--evolver-call-retries",
+        type=int,
+        default=4,
+        help="Additional retries for the cost-aware proposer/evolver LLM call.",
+    )
+    parser.add_argument(
+        "--evolver-retry-initial-delay",
+        type=float,
+        default=2.0,
+        help="Initial proposer retry delay in seconds.",
+    )
+    parser.add_argument(
+        "--evolver-retry-max-delay",
+        type=float,
+        default=30.0,
+        help="Maximum proposer retry delay in seconds.",
+    )
     parser.add_argument("--max-steps", type=int, default=60)
     parser.add_argument("--window-size", type=int, default=40)
     parser.add_argument("--max-proposals-per-batch", type=int, default=2)
+    parser.add_argument(
+        "--category-seed",
+        choices=["none", "basic-efficiency"],
+        default="basic-efficiency",
+        help="Category taxonomy exposed only in category-seeded-cost-aware mode.",
+    )
     parser.add_argument("--dry-run-proposer", action="store_true", help="Use a deterministic dummy proposal; no evolver LLM call.")
     parser.add_argument(
         "--predefined-strategies",
@@ -1184,7 +1796,11 @@ def main() -> int:
 
     workspace_dir = output_dir / "workspace"
     seed_workspace = Path(args.seed_workspace)
-    hide_efficiency = args.mode in {"normal-evolve", "cost-aware"}
+    hide_efficiency = args.mode in {
+        "normal-evolve",
+        "cost-aware",
+        "category-seeded-cost-aware",
+    }
     _copy_seed_workspace(seed_workspace, workspace_dir, hide_efficiency=hide_efficiency)
 
     runtime_config = None
@@ -1215,6 +1831,8 @@ def main() -> int:
     batches = [tasks[i : i + args.batch_size] for i in range(0, len(tasks), args.batch_size)]
 
     print(f"Mode: {args.mode}")
+    if args.mode == "category-seeded-cost-aware":
+        print(f"Category seed: {args.category_seed}")
     print(f"Tasks: {len(tasks)} in {len(batches)} batch(es)")
     print(f"Requested output: {requested_output_dir.resolve()}")
     print(f"Output: {output_dir.resolve()}")
@@ -1283,7 +1901,11 @@ def main() -> int:
                 f"result={normal_record['result']}"
             )
 
-        if args.mode in {"cost-aware", "predefined-cost-aware"} and batch_idx < len(batches):
+        if args.mode in {
+            "cost-aware",
+            "predefined-cost-aware",
+            "category-seeded-cost-aware",
+        } and batch_idx < len(batches):
             report = propose_emergent_efficiency(
                 batch_results=batch_results,
                 batch_num=batch_idx,
