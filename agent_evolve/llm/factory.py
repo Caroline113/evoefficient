@@ -3,7 +3,8 @@
 This module keeps provider routing in one place.  Existing Bedrock model IDs
 continue to work, while OpenRouter/OpenAI-compatible APIs can be selected
 either globally with ``AEVOLVE_MODEL_PROVIDER=...`` or per model with a
-provider prefix such as ``openrouter:<model>`` or ``openai:<model>``.
+provider prefix such as ``openrouter:<model>``, ``openai:<model>``, or
+``deepseek:<model>``.
 """
 
 from __future__ import annotations
@@ -14,8 +15,9 @@ from typing import Any
 from ..efficiency.routing import resolve_routing_overrides, route_client_env_suffix
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
-_PROVIDER_PREFIXES = {"bedrock", "openrouter", "openai", "anthropic", "litellm"}
+_PROVIDER_PREFIXES = {"bedrock", "openrouter", "openai", "anthropic", "litellm", "deepseek"}
 _PROVIDER_ENV_VARS = (
     "AEVOLVE_MODEL_PROVIDER",
     "AGENT_EVOLVE_MODEL_PROVIDER",
@@ -71,6 +73,14 @@ def resolve_model_selection(
         )
         if override_model and _looks_like_bedrock_model(clean_model):
             clean_model = override_model
+    elif resolved_provider == "deepseek" and prefixed_provider is None:
+        override_model = _env_pick(
+            "AEVOLVE_DEEPSEEK_MODEL",
+            "DEEPSEEK_MODEL",
+            route_level=route.get("route_level"),
+        )
+        if override_model and (_looks_like_bedrock_model(clean_model) or clean_model.startswith("deepseek-")):
+            clean_model = override_model
     elif resolved_provider == "openai" and prefixed_provider is None:
         override_model = _env_pick(
             "AEVOLVE_OPENAI_MODEL",
@@ -120,6 +130,15 @@ def create_strands_model(
         return OpenAIModel(
             model_id=selected_model,
             client_args=_openai_client_args(route_level=resolved_route_level),
+            params=_openai_params(max_tokens, temperature, stop_sequences, params),
+        )
+
+    if selected_provider == "deepseek":
+        from strands.models.openai import OpenAIModel
+
+        return OpenAIModel(
+            model_id=selected_model,
+            client_args=_deepseek_client_args(route_level=resolved_route_level),
             params=_openai_params(max_tokens, temperature, stop_sequences, params),
         )
 
@@ -203,6 +222,16 @@ def create_llm_provider(
             ),
         )
 
+    if selected_provider == "deepseek":
+        from agent_evolve.algorithms.unified.openai_compat import OpenAICompatProvider
+
+        client_args = _deepseek_client_args(route_level=resolved_route_level)
+        return OpenAICompatProvider(
+            model=selected_model,
+            api_key=client_args["api_key"],
+            base_url=client_args["base_url"],
+        )
+
     if selected_provider == "anthropic":
         from agent_evolve.llm.anthropic import AnthropicProvider
 
@@ -235,12 +264,16 @@ def create_openai_client_for_model(
         from openai import OpenAI
 
         return OpenAI(**_openai_client_args(route_level=_selected_route_level(task_profile=task_profile, route_level=route_level))), selected_model, selected_provider
+    if selected_provider == "deepseek":
+        from openai import OpenAI
+
+        return OpenAI(**_deepseek_client_args(route_level=_selected_route_level(task_profile=task_profile, route_level=route_level))), selected_model, selected_provider
     raise ValueError(f"Provider {selected_provider!r} is not OpenAI-compatible")
 
 
 def is_openai_compatible_model(model_id: str, provider: str | None = None) -> bool:
     selected_provider, _ = resolve_model_selection(model_id, provider)
-    return selected_provider in {"openrouter", "openai"}
+    return selected_provider in {"openrouter", "openai", "deepseek"}
 
 
 def _normalize_provider(provider: str) -> str:
@@ -250,6 +283,9 @@ def _normalize_provider(provider: str) -> str:
         "aws-bedrock": "bedrock",
         "openrouter.ai": "openrouter",
         "or": "openrouter",
+        "deepseek-ai": "deepseek",
+        "deepseek-official": "deepseek",
+        "deepseek.com": "deepseek",
         "openai-compatible": "openai",
         "openai-compat": "openai",
     }
@@ -271,6 +307,8 @@ def _provider_from_env() -> str | None:
 
 
 def _infer_provider(model_id: str) -> str:
+    if model_id.startswith("deepseek-"):
+        return "deepseek"
     if model_id.startswith(("gpt-", "o1", "o3", "o4")):
         return "openai"
     if "/" in model_id and os.environ.get("OPENROUTER_API_KEY"):
@@ -316,6 +354,18 @@ def _openrouter_client_args(*, route_level: str | None = None) -> dict[str, Any]
     if headers:
         args["default_headers"] = headers
     return args
+
+
+def _deepseek_client_args(*, route_level: str | None = None) -> dict[str, Any]:
+    return {
+        "api_key": _require_env("DEEPSEEK_API_KEY", "DeepSeek", route_level=route_level)
+        if not _env_pick("AEVOLVE_DEEPSEEK_API_KEY", route_level=route_level)
+        else _env_pick("AEVOLVE_DEEPSEEK_API_KEY", route_level=route_level),
+        "base_url": (
+            _env_pick("AEVOLVE_DEEPSEEK_BASE_URL", "DEEPSEEK_BASE_URL", route_level=route_level)
+            or DEEPSEEK_BASE_URL
+        ),
+    }
 
 
 def _openai_client_args(*, route_level: str | None = None) -> dict[str, Any]:

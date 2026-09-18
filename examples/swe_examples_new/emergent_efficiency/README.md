@@ -24,7 +24,7 @@ workspace 不会被修改。
 ```bash
 python examples/swe_examples_new/emergent_efficiency/run_emergent_efficiency.py \
   --mode normal-evolve \
-  --limit 10 \
+  --limit 20 \
   --batch-size 2 \
   --parallel 2 \
   --max-steps 60 \

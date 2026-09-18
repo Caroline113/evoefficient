@@ -28,6 +28,10 @@ class OpenAICompatProvider:
             os.environ.get("AEVOLVE_OPENROUTER_API_KEY")
             or os.environ.get("OPENROUTER_API_KEY")
         )
+        deepseek_key = (
+            os.environ.get("AEVOLVE_DEEPSEEK_API_KEY")
+            or os.environ.get("DEEPSEEK_API_KEY")
+        )
         openai_key = (
             os.environ.get("AEVOLVE_OPENAI_API_KEY")
             or os.environ.get("OPENAI_API_KEY")
@@ -36,9 +40,16 @@ class OpenAICompatProvider:
             base_url
             or os.environ.get("AEVOLVE_OPENAI_BASE_URL")
             or os.environ.get("EVOLVER_OPENAI_BASE_URL")
+            or os.environ.get("AEVOLVE_DEEPSEEK_BASE_URL")
+            or os.environ.get("DEEPSEEK_BASE_URL")
             or os.environ.get("AEVOLVE_OPENROUTER_BASE_URL")
             or os.environ.get("OPENROUTER_BASE_URL")
             or os.environ.get("OPENAI_BASE_URL")
+            or (
+                "https://api.deepseek.com"
+                if deepseek_key and not openrouter_key and not openai_key
+                else None
+            )
             or (
                 "https://openrouter.ai/api/v1"
                 if openrouter_key and not openai_key
@@ -47,6 +58,8 @@ class OpenAICompatProvider:
         )
         resolved_api_key = (
             api_key
+            or os.environ.get("AEVOLVE_DEEPSEEK_API_KEY")
+            or os.environ.get("DEEPSEEK_API_KEY")
             or os.environ.get("AEVOLVE_OPENAI_API_KEY")
             or os.environ.get("EVOLVER_OPENAI_API_KEY")
             or os.environ.get("AEVOLVE_OPENROUTER_API_KEY")

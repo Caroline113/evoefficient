@@ -204,7 +204,7 @@ Output JSON only:
     {
       "name": "short_generic_name",
       "kind": "skill" | "prompt_fragment" | "tool" | "memory",
-      "categories": ["M5 Tools", "M4 Planning"],
+      "categories": ["M1 Context"],
       "description": "one sentence with trigger and do-not-trigger conditions",
       "trigger": "when to use it",
       "do_not_trigger": "when not to use it",
