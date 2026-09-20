@@ -1,8 +1,9 @@
-"""Docker environment management for Terminal-Bench 2.0 containers."""
+"""Docker environment management for Terminal-Bench 2.x containers."""
 
 from __future__ import annotations
 
 import logging
+import shlex
 import subprocess
 import time
 import uuid
@@ -12,11 +13,17 @@ logger = logging.getLogger(__name__)
 
 
 class TB2Container:
-    """Manages a Terminal-Bench 2.0 Docker container lifecycle."""
+    """Manages a Terminal-Bench 2.x Docker container lifecycle."""
 
-    def __init__(self, image_name: str, container_name: str | None = None):
+    def __init__(self, image_name: str, container_name: str | None = None,
+                 *, cpus: float | int | None = None,
+                 memory_mb: int | None = None,
+                 environment: dict | None = None):
         self.image_name = image_name
         self.container_name = container_name or f"tb2-{uuid.uuid4().hex[:12]}"
+        self.cpus = cpus
+        self.memory_mb = memory_mb
+        self.environment = environment or {}
         self._running = False
 
     def start(self, max_retries: int = 3) -> str:
@@ -34,14 +41,17 @@ class TB2Container:
                             attempt + 1, max_retries, self.container_name)
 
             subprocess.run(["docker", "rm", "-f", self.container_name], capture_output=True)
+            command = ["docker", "run", "-d", "--name", self.container_name,
+                       "--platform", "linux/amd64"]
+            if self.cpus:
+                command += ["--cpus", str(self.cpus)]
+            if self.memory_mb:
+                command += ["--memory", f"{self.memory_mb}m"]
+            for key, value in self.environment.items():
+                command += ["-e", f"{key}={value}"]
+            command += [self.image_name, "sh", "-c", "sleep infinity"]
             result = subprocess.run(
-                [
-                    "docker", "run", "-d",
-                    "--name", self.container_name,
-                    "--platform", "linux/amd64",
-                    self.image_name,
-                    "sh", "-c", "sleep infinity",
-                ],
+                command,
                 capture_output=True,
                 text=True,
             )
@@ -105,13 +115,31 @@ class TB2Container:
         if result.returncode != 0:
             raise RuntimeError(f"Failed to copy {local_path} -> {container_path}: {result.stderr}")
 
-    def run_tests(self, test_sh_path: str, timeout: int = 900) -> tuple[bool, str]:
+    def copy_directory_contents_to(self, local_dir: str, container_dir: str) -> None:
+        """Copy a directory's contents without creating an extra nested level."""
+        self.exec(f"mkdir -p {container_dir}")
+        source = f"{Path(local_dir).resolve()}/."
+        result = subprocess.run(
+            ["docker", "cp", source, f"{self.container_name}:{container_dir}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to copy {source} -> {container_dir}: {result.stderr}")
+
+    def run_tests(self, test_sh_path: str, timeout: int = 900,
+                  verifier_env: dict | None = None) -> tuple[bool, str]:
         """Copy test.sh into the container, run it, and check reward.txt."""
         logger.info("Running test.sh (timeout=%ds)...", timeout)
         self.exec("mkdir -p /tests /logs/verifier")
         self.copy_to(test_sh_path, "/tests/test.sh")
         self.exec("chmod +x /tests/test.sh")
-        output = self.exec("bash /tests/test.sh", timeout=timeout)
+        env_prefix = " ".join(
+            f"{key}={shlex.quote(str(value))}"
+            for key, value in (verifier_env or {}).items()
+        )
+        command = f"{env_prefix} bash /tests/test.sh".strip()
+        output = self.exec(command, timeout=timeout)
         reward = self.exec("cat /logs/verifier/reward.txt 2>/dev/null").strip()
         passed = reward == "1"
         logger.info("test.sh result: reward=%r, passed=%s", reward, passed)
@@ -126,11 +154,14 @@ class TB2Container:
     ]
 
     def run_tests_with_retry(
-        self, test_sh_path: str, timeout: int = 900, max_retries: int = 3
+        self, test_sh_path: str, timeout: int = 900, max_retries: int = 3,
+        verifier_env: dict | None = None,
     ) -> tuple[bool, str]:
         """Run tests with retry on transient network errors."""
         for attempt in range(max_retries):
-            passed, output = self.run_tests(test_sh_path, timeout=timeout)
+            passed, output = self.run_tests(
+                test_sh_path, timeout=timeout, verifier_env=verifier_env
+            )
             if passed:
                 return passed, output
             output_lower = output.lower()

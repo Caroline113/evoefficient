@@ -140,7 +140,13 @@ def _solve_one_task(
         ws_tool_specs = skill_agent.get_tool_specs() if skill_agent else None
         ws_tool_executors = skill_agent.load_tool_executors() if skill_agent else None
 
-        container = TB2Container(task.docker_image)
+        environment_cfg = task.metadata.get("environment", {})
+        container = TB2Container(
+            task.docker_image,
+            cpus=environment_cfg.get("cpus"),
+            memory_mb=environment_cfg.get("memory_mb"),
+            environment=environment_cfg.get("env", {}),
+        )
         container.start()
         task_log.info("Container started: %s", container.container_name)
 
@@ -281,6 +287,8 @@ def _solve_one_task(
                 "input_tokens": react_result.total_input_tokens,
                 "output_tokens": react_result.total_output_tokens,
                 "total_tokens": react_result.total_input_tokens + react_result.total_output_tokens,
+                "cache_read_input_tokens": react_result.total_cache_read_input_tokens,
+                "cache_write_input_tokens": react_result.total_cache_write_input_tokens,
             }
             conversation = extract_conversation(react_result.messages)
             skill_draft = react_result.skill_draft  # v15: solver-proposed skill
@@ -310,6 +318,8 @@ def _solve_one_task(
                         "input_tokens": u.get("inputTokens", 0),
                         "output_tokens": u.get("outputTokens", 0),
                         "total_tokens": u.get("totalTokens", 0),
+                        "cache_read_input_tokens": u.get("cacheReadInputTokens", 0),
+                        "cache_write_input_tokens": u.get("cacheWriteInputTokens", 0),
                     }
                 except Exception:
                     pass
@@ -334,6 +344,9 @@ def _solve_one_task(
             task_log.info("Copying eval files into container for evaluation...")
             container.exec("mkdir -p /tests /logs/verifier")
 
+            if task.tests_dir and os.path.isdir(task.tests_dir):
+                container.copy_directory_contents_to(task.tests_dir, "/tests")
+
             if task.files:
                 for container_path, local_path in task.files.items():
                     if os.path.exists(local_path):
@@ -353,7 +366,10 @@ def _solve_one_task(
             eval_t0 = time.time()
             verifier_timeout = task.metadata.get("verifier_timeout_sec", 900)
             passed, eval_output = container.run_tests_with_retry(
-                task.test_sh_path, timeout=verifier_timeout, max_retries=3
+                task.test_sh_path,
+                timeout=verifier_timeout,
+                max_retries=3,
+                verifier_env=task.metadata.get("verifier_env", {}),
             )
             eval_elapsed = time.time() - eval_t0
             task_log.info("--- Evaluation finished in %.1fs: %s ---",

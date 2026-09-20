@@ -143,5 +143,6 @@ examples/mcp_solve_one.py
 nonevolution_workdir/
 examples/tb_examples/skipped/
 agent_evolve/benchmarks/tb2/challenges/
+agent_evolve/benchmarks/tb21/tasks/
 examples/run_skillbench_solve_all_ablate.sh
 examples/skillbench_evolve_one.py

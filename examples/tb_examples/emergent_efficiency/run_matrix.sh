@@ -7,8 +7,8 @@ set -euo pipefail
 #   bash examples/tb_examples/emergent_efficiency/run_matrix.sh <RUN_NAME> [flags]
 #
 # Example:
-#   bash examples/tb_examples/emergent_efficiency/run_matrix.sh tb20 \
-#     --limit 20 --batch-size 5 --parallel 4
+  # bash examples/tb_examples/emergent_efficiency/run_matrix.sh tb21 \
+  #   --limit 20 --batch-size 4 --parallel 2
 
 RUN_NAME="${1:?Usage: $0 <RUN_NAME> [shared runner flags]}"
 shift
@@ -18,7 +18,7 @@ MODES=(
   cost-aware
   predefined-control
   # predefined-cost-aware
-  category-seeded-cost-aware
+  # category-seeded-cost-aware
 )
 
 for MODE in "${MODES[@]}"; do

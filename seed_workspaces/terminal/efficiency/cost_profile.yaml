@@ -1,3 +1,21 @@
 preferred_mode: balanced
 token_budget: 1
 step_budget: 1
+cost_currency: USD
+
+# Prices are per 1M tokens. Keep this aligned with the SWE emergent-efficiency
+# workspace so both benchmarks calculate token cost in the same way.
+model_prices:
+  currency: USD
+  routes:
+    hard:
+      input_per_1m: 0.05
+      output_per_1m: 4.5
+      cache_read_per_1m: 1.5
+      cache_write_per_1m: 1.5
+    easy:
+      input_per_1m: 0.3
+      output_per_1m: 0.6
+      cache_read_per_1m: 0
+      cache_write_per_1m: 0
+  models: {}

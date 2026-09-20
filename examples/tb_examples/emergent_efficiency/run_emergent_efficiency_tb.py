@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run emergent efficiency experiments on Terminal-Bench 2.0.
+"""Run emergent efficiency experiments on Terminal-Bench 2.1.
 
 This mirrors the SWE emergent-efficiency experiment matrix on Terminal-Bench:
 
@@ -49,6 +49,7 @@ from agent_evolve.efficiency.visualization import (
     write_strategy_library_plot,
     write_summary_table,
 )
+from agent_evolve.llm.factory import resolve_model_selection
 from agent_evolve.types import Feedback, Observation, Task, Trajectory
 
 logger = logging.getLogger("tb_emergent_efficiency")
@@ -186,7 +187,7 @@ def _task_to_core_task(task: TB2Task) -> Task:
             "test_sh_path": task.test_sh_path,
             "test_py_path": task.test_py_path,
             "files": task.files,
-            "benchmark": "terminal_bench_2",
+            "benchmark": "terminal_bench_2_1",
         }
     )
     return Task(id=task.name, input=task.prompt, metadata=metadata)
@@ -367,6 +368,21 @@ def _build_system_prompt_for_terminal(agent: Any, workspace_dir: Path) -> str:
     return "\n\n".join(part for part in parts if part)
 
 
+def _cost_price_profile(workspace_dir: Path) -> dict[str, Any]:
+    """Load pricing exactly as the SWE agent does for usage normalization."""
+    path = workspace_dir / "efficiency" / "cost_profile.yaml"
+    if not path.exists():
+        return {}
+    try:
+        import yaml
+
+        value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return value if isinstance(value, dict) else {}
+    except Exception as exc:
+        logger.warning("Failed to load cost profile %s: %s", path, exc)
+        return {}
+
+
 def _normalize_tb_result(
     *,
     raw: dict[str, Any],
@@ -382,9 +398,13 @@ def _normalize_tb_result(
     tool_steps = _conversation_to_steps(conversation)
     active_config = load_active_config(workspace_dir)
     active_strategies = list(active_config.get("strategies", []) or [])
+    provider, selected_model = resolve_model_selection(model_id, route_level="hard")
     usage = normalize_usage(
         raw.get("usage", {}),
-        model_id=model_id,
+        price_profile=_cost_price_profile(workspace_dir),
+        model_id=selected_model,
+        provider=provider,
+        route_level="hard",
         usage_record_quality=_usage_quality(raw.get("usage", {})),
         usage_source="terminal_bench_react_solver",
         usage_estimated=False,
@@ -472,7 +492,7 @@ def _normalize_tb_result(
             **task.metadata,
             "task_name": task.name,
             "docker_image": task.docker_image,
-            "benchmark": "terminal_bench_2",
+            "benchmark": "terminal_bench_2_1",
         },
         "batch": batch_num,
         "mode": mode,
@@ -563,7 +583,7 @@ def _results_to_observations(results: list[dict[str, Any]], tasks_by_id: dict[st
             success=bool(result.get("success")),
             score=float(result.get("score", 0.0) or 0.0),
             detail=str(result.get("feedback_detail") or ""),
-            raw={"benchmark": "terminal_bench_2"},
+            raw={"benchmark": "terminal_bench_2_1"},
         )
         trajectory = Trajectory(
             task_id=task.id,
@@ -932,7 +952,7 @@ def _write_run_outputs(output_dir: Path, results: list[dict[str, Any]], *, mode:
         encoding="utf-8",
     )
     rows = _make_summary_rows(results, mode=mode)
-    payload = {"mode": mode, "benchmark": "terminal_bench_2", "overall": rows[-1], "by_batch": rows[:-1]}
+    payload = {"mode": mode, "benchmark": "terminal_bench_2_1", "overall": rows[-1], "by_batch": rows[:-1]}
     (output_dir / "summary.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     behavior_payload = {
         "overall": _swe._summarize_behavior_stats(results),
@@ -979,7 +999,7 @@ def _configure_predefined_control(workspace_dir: Path, strategies: list[str], *,
 
 def _write_experiment_manifest(output_dir: Path, args: argparse.Namespace, tasks: list[TB2Task]) -> None:
     payload = {
-        "benchmark": "terminal_bench_2",
+        "benchmark": "terminal_bench_2_1",
         "mode": args.mode,
         "tasks": [task.name for task in tasks],
         "task_count": len(tasks),
@@ -1000,7 +1020,7 @@ def _write_experiment_manifest(output_dir: Path, args: argparse.Namespace, tasks
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Emergent efficiency Terminal-Bench 2.0 experiment runner")
+    parser = argparse.ArgumentParser(description="Emergent efficiency Terminal-Bench 2.1 experiment runner")
     parser.add_argument(
         "--mode",
         choices=[
@@ -1012,7 +1032,11 @@ def parse_args() -> argparse.Namespace:
         ],
         default="cost-aware",
     )
-    parser.add_argument("--challenges-dir", default=None, help="Path to Terminal-Bench challenges directory")
+    parser.add_argument(
+        "--challenges-dir",
+        default=None,
+        help="Path to Terminal-Bench 2.1 tasks directory (auto-downloads when omitted)",
+    )
     parser.add_argument("--tasks", default=None, help="Comma-separated task names to run")
     parser.add_argument("--exclude", default=None, help="Comma-separated task names to skip")
     parser.add_argument("--category", default=None, help="Filter by Terminal-Bench category")
@@ -1137,7 +1161,7 @@ def main() -> int:
     print(f"Mode: {args.mode}")
     if args.mode == "category-seeded-cost-aware":
         print(f"Category seed: {args.category_seed}")
-    print(f"Benchmark: Terminal-Bench 2.0")
+    print("Benchmark: Terminal-Bench 2.1")
     print(f"Tasks: {len(tasks)} in {len(batches)} batch(es)")
     print(f"Output: {output_dir.resolve()}")
     print(f"Workspace: {workspace_dir.resolve()}")

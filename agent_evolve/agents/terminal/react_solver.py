@@ -251,6 +251,8 @@ class ReactSolverResult:
         self.submit_answer: str = ""
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
+        self.total_cache_read_input_tokens: int = 0
+        self.total_cache_write_input_tokens: int = 0
         self.tool_call_count: int = 0
         self.timed_out: bool = False
         self.skill_draft: str | None = None  # Solver-proposed skill (v15)
@@ -396,6 +398,8 @@ def react_solve(
         usage = response.get("usage", {})
         result.total_input_tokens += usage.get("inputTokens", 0)
         result.total_output_tokens += usage.get("outputTokens", 0)
+        result.total_cache_read_input_tokens += usage.get("cacheReadInputTokens", 0)
+        result.total_cache_write_input_tokens += usage.get("cacheWriteInputTokens", 0)
 
         # Parse response
         output_msg = response.get("output", {}).get("message", {})
@@ -519,9 +523,10 @@ def react_solve(
     elapsed = time.time() - t0
     log.info(
         "ReAct loop done: %d turns, %d tool calls, %.0fs, "
-        "tokens=%d in + %d out, submitted=%s",
+        "tokens=%d in + %d out + %d cache-read + %d cache-write, submitted=%s",
         turn + 1, result.tool_call_count, elapsed,
         result.total_input_tokens, result.total_output_tokens,
+        result.total_cache_read_input_tokens, result.total_cache_write_input_tokens,
         result.submitted,
     )
 
@@ -618,8 +623,11 @@ def _react_solve_openai(
             break
 
         usage = getattr(response, "usage", None)
-        result.total_input_tokens += _usage_value(usage, "prompt_tokens")
-        result.total_output_tokens += _usage_value(usage, "completion_tokens")
+        input_tokens, output_tokens, cache_read, cache_write = _openai_usage(usage)
+        result.total_input_tokens += input_tokens
+        result.total_output_tokens += output_tokens
+        result.total_cache_read_input_tokens += cache_read
+        result.total_cache_write_input_tokens += cache_write
 
         message = response.choices[0].message
         content = getattr(message, "content", None) or ""
@@ -701,9 +709,10 @@ def _react_solve_openai(
     elapsed = time.time() - t0
     log.info(
         "ReAct loop done: %d turns, %d tool calls, %.0fs, "
-        "tokens=%d in + %d out, submitted=%s",
+        "tokens=%d in + %d out + %d cache-read + %d cache-write, submitted=%s",
         turn + 1, result.tool_call_count, elapsed,
         result.total_input_tokens, result.total_output_tokens,
+        result.total_cache_read_input_tokens, result.total_cache_write_input_tokens,
         result.submitted,
     )
 
@@ -857,6 +866,39 @@ def _usage_value(usage: Any, key: str) -> int:
     if isinstance(usage, dict):
         return int(usage.get(key, 0) or 0)
     return int(getattr(usage, key, 0) or 0)
+
+
+def _nested_usage_value(usage: Any, parent: str, key: str) -> int:
+    details = usage.get(parent) if isinstance(usage, dict) else getattr(usage, parent, None)
+    return _usage_value(details, key)
+
+
+def _openai_usage(usage: Any) -> tuple[int, int, int, int]:
+    """Return uncached input, output, cache-read and cache-write tokens.
+
+    OpenAI-compatible providers expose cache telemetry in different places.
+    DeepSeek reports prompt_cache_hit/miss_tokens, while OpenAI reports
+    prompt_tokens_details.cached_tokens.  Since prompt_tokens includes cache
+    hits for those APIs, subtract hits to avoid charging them twice.
+    """
+    prompt_total = _usage_value(usage, "prompt_tokens")
+    output_tokens = _usage_value(usage, "completion_tokens")
+
+    cache_read = _usage_value(usage, "prompt_cache_hit_tokens")
+    cache_miss = _usage_value(usage, "prompt_cache_miss_tokens")
+    if cache_read <= 0:
+        cache_read = _nested_usage_value(usage, "prompt_tokens_details", "cached_tokens")
+    if cache_read <= 0:
+        cache_read = _usage_value(usage, "cache_read_input_tokens")
+
+    cache_write = _usage_value(usage, "cache_write_input_tokens")
+    if cache_write <= 0:
+        cache_write = _usage_value(usage, "cache_creation_input_tokens")
+
+    # DeepSeek's miss counter is the authoritative billable uncached input.
+    # Otherwise prompt_tokens is inclusive, so remove cache hits.
+    input_tokens = cache_miss if cache_miss > 0 else max(0, prompt_total - cache_read)
+    return input_tokens, output_tokens, cache_read, cache_write
 
 
 # ── Conversation extraction ─────────────────────────────────────────

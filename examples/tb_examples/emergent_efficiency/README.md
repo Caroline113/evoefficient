@@ -1,6 +1,8 @@
 # Terminal-Bench Emergent Efficiency
 
-This runner ports the SWE emergent-efficiency experiment matrix to Terminal-Bench 2.0.
+This runner ports the SWE emergent-efficiency experiment matrix to Terminal-Bench 2.1.
+When `--challenges-dir` is omitted, the official Terminal-Bench 2.1 task
+repository is downloaded automatically on first use.
 It supports all five experiment groups:
 
 - `normal-evolve`
@@ -85,7 +87,7 @@ uv run python examples/tb_examples/emergent_efficiency/run_emergent_efficiency_t
 Useful task filters:
 
 ```bash
---challenges-dir /path/to/terminal_bench_2/challenges
+--challenges-dir /path/to/terminal-bench-2-1/tasks
 --tasks task_a,task_b
 --exclude task_c
 --category scientific-computing
