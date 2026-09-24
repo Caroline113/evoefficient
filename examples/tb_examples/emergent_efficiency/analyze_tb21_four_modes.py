@@ -171,26 +171,39 @@ def main() -> int:
     batches = pd.DataFrame(batch_rows)
     batches.to_csv(out / "batch_comparison.csv", index=False, float_format="%.6f")
 
-    # Figure 1: headline metrics with relative changes embedded in labels.
-    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+    # Figure 1: all headline metrics in one normalized chart.  Normal=100
+    # makes increases/decreases directly comparable despite different units.
+    fig, ax = plt.subplots(figsize=(14, 7))
     configs = [
-        ("success_rate", "Success rate", lambda v: f"{v*100:.0f}%", "success_rate_delta_pp", "pp"),
-        ("cost_usd", "Total cost (USD)", lambda v: f"${v:.2f}", "cost_usd_delta_pct", "%"),
-        ("tokens", "Tokens (non-cache)", lambda v: f"{v/1e6:.2f}M", "tokens_delta_pct", "%"),
-        ("cache_read_tokens", "Cache-read tokens", lambda v: f"{v/1e6:.1f}M", "cache_read_tokens_delta_pct", "%"),
+        ("success_rate", "Success rate", lambda v: f"{v*100:.0f}%", "success_rate_delta_pp", " pp"),
+        ("cost_usd", "Total cost", lambda v: f"${v:.2f}", "cost_usd_delta_pct", "%"),
+        ("tokens", "Tokens", lambda v: f"{v/1e6:.2f}M", "tokens_delta_pct", "%"),
+        ("tool_calls", "Tool calls", lambda v: f"{int(v):,}", "tool_calls_delta_pct", "%"),
     ]
-    x = np.arange(len(MODE_ORDER))
-    for ax, (metric, title, formatter, delta_col, unit) in zip(axes.flat, configs):
-        vals = overall.loc[MODE_ORDER, metric].to_numpy()
-        bars = ax.bar(x, vals, color=[COLORS[m] for m in MODE_ORDER])
-        ax.set_title(title)
-        ax.set_xticks(x, [SHORT[m] for m in MODE_ORDER], rotation=15, ha="right")
-        ax.grid(axis="y", alpha=.25)
-        for i, (bar, val) in enumerate(zip(bars, vals)):
-            delta = overall.loc[MODE_ORDER[i], delta_col]
-            delta_text = "baseline" if i == 0 else (f"{delta:+.1f}{unit}")
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
-                    f"{formatter(val)}\n({delta_text})", ha="center", va="bottom", fontsize=9)
+    x = np.arange(len(configs))
+    width = 0.19
+    for mode_index, mode in enumerate(MODE_ORDER):
+        heights = [overall.loc[mode, metric] / base[metric] * 100 for metric, *_ in configs]
+        positions = x + (mode_index - 1.5) * width
+        bars = ax.bar(positions, heights, width, color=COLORS[mode], label=SHORT[mode])
+        for bar, height, (metric, _, formatter, delta_col, unit) in zip(bars, heights, configs):
+            if mode == "normal-evolve":
+                delta_text = "base"
+            else:
+                delta_text = f"{overall.loc[mode, delta_col]:+.1f}{unit}"
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                height + 1.2,
+                f"{formatter(overall.loc[mode, metric])}\n{delta_text}",
+                ha="center", va="bottom", fontsize=8, rotation=0,
+            )
+    ax.axhline(100, color="#334155", linewidth=1.2, linestyle="--", label="Normal baseline")
+    ax.set_xticks(x, [title for _, title, *_ in configs])
+    ax.set_ylabel("Relative index (Normal = 100)")
+    ax.set_title("Overall metrics and change relative to normal-evolve")
+    ax.set_ylim(0, max(128, ax.get_ylim()[1] + 5))
+    ax.grid(axis="y", alpha=.25)
+    ax.legend(ncol=5, loc="upper center", bbox_to_anchor=(0.5, -0.1))
     savefig(figures / "01_overall_metrics.png")
 
     # Figure 2: success/cost efficiency frontier.
