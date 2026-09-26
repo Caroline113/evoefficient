@@ -742,14 +742,40 @@ class SweAgent(BaseAgent):
                 provider=provider,
                 route_level=route_level,
             )
-        if not cls._usage_has_cost(usage):
-            usage, per_turn = cls._usage_from_messages(
-                conversation,
-                price_profile=price_profile,
-                model_id=model_id,
-                provider=provider,
-                route_level=route_level,
-            )
+        metrics_usage = dict(usage)
+        message_usage, message_turns = cls._usage_from_messages(
+            conversation,
+            price_profile=price_profile,
+            model_id=model_id,
+            provider=provider,
+            route_level=route_level,
+        )
+        metrics_total = int(metrics_usage.get("total_tokens", 0) or 0)
+        message_total = int(message_usage.get("total_tokens", 0) or 0)
+        consistency = {
+            "metrics_total_tokens": metrics_total,
+            "message_total_tokens": message_total,
+            "tolerance": 0.20,
+            "status": "missing",
+            "selected": "none",
+        }
+        if metrics_total and message_total:
+            ratio = metrics_total / message_total
+            consistency["metrics_to_messages_ratio"] = ratio
+            if not 0.80 <= ratio <= 1.20:
+                usage, per_turn = message_usage, message_turns
+                usage.update({
+                    "usage_record_quality": "inconsistent",
+                    "usage_source": "agent_messages_metadata_inconsistent_metrics",
+                })
+                consistency.update(status="inconsistent", selected="messages")
+            else:
+                consistency.update(status="consistent", selected="metrics")
+        elif message_total:
+            usage, per_turn = message_usage, message_turns
+            consistency.update(status="messages_only", selected="messages")
+        elif metrics_total:
+            consistency.update(status="metrics_only", selected="metrics")
         if not cls._usage_has_cost(usage):
             usage = cls._estimate_usage_from_runtime(
                 system_prompt=system_prompt,
@@ -763,6 +789,10 @@ class SweAgent(BaseAgent):
                 route_level=route_level,
             )
             per_turn = [usage]
+            consistency.update(status="estimated", selected="estimate")
+        usage["metrics_usage"] = metrics_usage
+        usage["message_usage"] = message_usage
+        usage["usage_consistency"] = consistency
         return usage, per_turn
 
     def _build_strands_agent(self, task_profile: dict[str, Any] | None = None) -> tuple[Agent, list]:
@@ -1315,6 +1345,38 @@ class SweAgent(BaseAgent):
                         temperature=0.2,
                     )
                     skill_proposal = str(proposal_response.content or "").strip()
+                    proposal_usage = normalize_usage(
+                        proposal_response.usage or {},
+                        price_profile=price_profile,
+                        model_id=hard_model,
+                        provider=hard_provider,
+                        route_level="hard",
+                    )
+                    if self._usage_has_cost(proposal_usage):
+                        prior_audit = {
+                            key: usage.get(key) for key in
+                            ("metrics_usage", "message_usage", "usage_consistency",
+                             "main_cost_units", "route_model_cost_units",
+                             "route_model_cost_by_level", "usage_record_quality")
+                        }
+                        usage = self._sum_usage(
+                            [usage, proposal_usage], price_profile=price_profile,
+                            model_id=hard_model, provider=hard_provider, route_level="hard",
+                        )
+                        usage.update({k: v for k, v in prior_audit.items() if v is not None})
+                        usage["proposal_usage"] = proposal_usage
+                        usage["main_cost_units"] = (
+                            float(prior_audit.get("main_cost_units") or 0.0)
+                            + float(proposal_usage.get("cost_units") or 0.0)
+                        )
+                        usage["route_model_cost_units"] = float(
+                            prior_audit.get("route_model_cost_units") or 0.0
+                        )
+                        usage["usage_source"] = (
+                            str(prior_audit.get("usage_consistency", {}).get("selected", "solver"))
+                            + "+skill_proposal"
+                        )
+                        per_turn_usage.append(proposal_usage)
                     if "ACTION: NONE" not in skill_proposal.upper():
                         action = "ENHANCE" if "ACTION: ENHANCE" in skill_proposal.upper() else "NEW"
                         logger.info("Intervention proposal (%s) for %s: %s", action, instance_id, skill_proposal[:100])
@@ -1322,6 +1384,17 @@ class SweAgent(BaseAgent):
                         skill_proposal = skill_proposal if "CONFIDENCE:" in skill_proposal else ""
                 except Exception as e:
                     logger.warning("Intervention proposal failed for %s: %s", instance_id, e)
+
+            # Proposal generation happens after the solve summary is created;
+            # refresh it so exported results include proposal usage and audits.
+            steps[-1]["usage"] = usage
+            steps[-1]["per_turn_usage"] = per_turn_usage
+            steps[-1]["num_turns"] = len(per_turn_usage)
+            steps[-1]["max_input_tokens_per_turn"] = max(
+                (t.get("input_tokens", 0) for t in per_turn_usage), default=0
+            )
+            steps[-1]["usage_record_quality"] = usage.get("usage_record_quality", "")
+            steps[-1]["usage_source"] = usage.get("usage_source", "")
 
         traj = Trajectory(task_id=task.id, output=patch, steps=steps)
         traj._conversation = conversation

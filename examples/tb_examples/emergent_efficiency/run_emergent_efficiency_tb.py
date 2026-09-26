@@ -531,6 +531,8 @@ def _solve_terminal_batch(
                 args.solver,
                 system_prompt_text,
                 agent,
+                # Ordinary solver-proposal evolution is the common base for
+                # every mode; cost-aware/predefined modes add modules on top.
                 args.propose_skill,
             ): task
             for task in batch_tasks

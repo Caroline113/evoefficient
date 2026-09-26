@@ -33,6 +33,7 @@ A practical guide to using the `agent-evolve` package — from installation thro
 uv venv .venv --python 3.11
 conda activate aevolve
 source .venv/bin/activate
+source .env
 
 # Install from source
 git clone https://github.com/A-EVO-Lab/a-evolve.git && cd a-evolve

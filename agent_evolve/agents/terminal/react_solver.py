@@ -61,7 +61,7 @@ CONTINUE_PROMPT = (
 SKILL_REFLECTION_PROMPT = """\
 Now that you've finished this task, reflect on what you learned. \
 If there is domain-specific knowledge that would help a future agent \
-solve SIMILAR tasks (not this exact task), write a skill draft.
+solve SIMILAR tasks (not this exact task), propose a reusable intervention.
 
 A useful skill contains:
 - Specific tools, libraries, or commands needed for this category of task
@@ -72,19 +72,20 @@ Do NOT include generic advice (timeout handling, package installation, debugging
 Only include knowledge specific to this task's domain.
 
 If this task was straightforward and no special knowledge was needed, \
-respond with just: NO_SKILL_NEEDED
+respond with exactly:
+CONFIDENCE: LOW
+ACTION: NONE
 
 Otherwise, respond with EXACTLY this format (no other text before or after):
 
-```
----
-name: <short-kebab-case-name>
-description: <one-line description of when this skill applies>
-keywords: <comma-separated keywords for matching tasks to this skill>
----
-
-<skill content: domain-specific checklist, commands, pitfalls, verification>
-```"""
+CONFIDENCE: HIGH/MEDIUM/LOW
+ACTION: NEW
+TYPE: skill
+NAME: <generic-snake-case-name>
+DESCRIPTION: TRIGGER when ...; DO NOT TRIGGER when ...
+CONTENT:
+<domain-specific checklist, commands, pitfalls, and verification steps; under 500 words>
+"""
 
 
 # ── Tool definitions (Bedrock Converse format) ──────────────────────
@@ -387,19 +388,20 @@ def react_solve(
                 log.error("LLM error: %s", err_str[:300])
                 break
 
-        # Check timeout after LLM call (subtract retry lost time)
-        effective_elapsed = time.time() - t0 - retry_lost_time
-        if effective_elapsed >= timeout_sec:
-            log.warning("Timeout reached after LLM call (%.0fs effective >= %ds)", effective_elapsed, timeout_sec)
-            result.timed_out = True
-            break
-
-        # Track usage
+        # Track usage before the timeout check: a completed provider call is
+        # billable even when it returns just after the task deadline.
         usage = response.get("usage", {})
         result.total_input_tokens += usage.get("inputTokens", 0)
         result.total_output_tokens += usage.get("outputTokens", 0)
         result.total_cache_read_input_tokens += usage.get("cacheReadInputTokens", 0)
         result.total_cache_write_input_tokens += usage.get("cacheWriteInputTokens", 0)
+
+        # Check timeout after recording the completed call.
+        effective_elapsed = time.time() - t0 - retry_lost_time
+        if effective_elapsed >= timeout_sec:
+            log.warning("Timeout reached after LLM call (%.0fs effective >= %ds)", effective_elapsed, timeout_sec)
+            result.timed_out = True
+            break
 
         # Parse response
         output_msg = response.get("output", {}).get("message", {})
@@ -534,9 +536,13 @@ def react_solve(
 
     # ── Skill reflection (v15) ──────────────────────────────────────
     if propose_skill:
-        result.skill_draft = _reflect_for_skill(
+        result.skill_draft, reflection_usage = _reflect_for_skill(
             client, model_id, system_blocks, messages, max_tokens, log,
         )
+        result.total_input_tokens += reflection_usage[0]
+        result.total_output_tokens += reflection_usage[1]
+        result.total_cache_read_input_tokens += reflection_usage[2]
+        result.total_cache_write_input_tokens += reflection_usage[3]
 
     return result
 
@@ -616,18 +622,18 @@ def _react_solve_openai(
             log.error("LLM error: %s", err_str[:300])
             break
 
-        effective_elapsed = time.time() - t0 - retry_lost_time
-        if effective_elapsed >= timeout_sec:
-            log.warning("Timeout reached after LLM call (%.0fs effective >= %ds)", effective_elapsed, timeout_sec)
-            result.timed_out = True
-            break
-
         usage = getattr(response, "usage", None)
         input_tokens, output_tokens, cache_read, cache_write = _openai_usage(usage)
         result.total_input_tokens += input_tokens
         result.total_output_tokens += output_tokens
         result.total_cache_read_input_tokens += cache_read
         result.total_cache_write_input_tokens += cache_write
+
+        effective_elapsed = time.time() - t0 - retry_lost_time
+        if effective_elapsed >= timeout_sec:
+            log.warning("Timeout reached after LLM call (%.0fs effective >= %ds)", effective_elapsed, timeout_sec)
+            result.timed_out = True
+            break
 
         message = response.choices[0].message
         content = getattr(message, "content", None) or ""
@@ -718,9 +724,13 @@ def _react_solve_openai(
 
     result.messages = messages
     if propose_skill:
-        result.skill_draft = _reflect_for_skill_openai(
+        result.skill_draft, reflection_usage = _reflect_for_skill_openai(
             client, selected_model, messages, openai_tools, max_tokens, log
         )
+        result.total_input_tokens += reflection_usage[0]
+        result.total_output_tokens += reflection_usage[1]
+        result.total_cache_read_input_tokens += reflection_usage[2]
+        result.total_cache_write_input_tokens += reflection_usage[3]
     return result
 
 
@@ -733,12 +743,12 @@ def _reflect_for_skill(
     messages: list[dict],
     max_tokens: int,
     log: logging.Logger,
-) -> str | None:
+) -> tuple[str | None, tuple[int, int, int, int]]:
     """Ask the solver to propose a skill draft based on what it learned.
 
     Uses the existing conversation context (solver has full task history).
-    Single LLM call, no tools, 60s timeout. Returns the skill draft text
-    or None if the solver declines or the call fails.
+    Returns ``(draft, usage_tuple)`` so the reflection call is included in
+    experiment token and cost accounting even when no proposal is produced.
     """
     reflect_messages = messages + [
         {"role": "user", "content": [{"text": SKILL_REFLECTION_PROMPT}]}
@@ -760,27 +770,29 @@ def _reflect_for_skill(
             if "text" in block:
                 text += block["text"]
 
-        if not text or "NO_SKILL_NEEDED" in text:
+        raw_usage = response.get("usage", {})
+        reflection_usage = (
+            int(raw_usage.get("inputTokens", 0) or 0),
+            int(raw_usage.get("outputTokens", 0) or 0),
+            int(raw_usage.get("cacheReadInputTokens", 0) or 0),
+            int(raw_usage.get("cacheWriteInputTokens", 0) or 0),
+        )
+        if not text or "ACTION: NONE" in text.upper():
             log.info("[reflection] Solver declined: no skill needed")
-            return None
+            return None, reflection_usage
 
-        # Extract the skill draft (everything between ``` fences, or the full text if no fences)
-        if "---\nname:" in text:
-            # Find the YAML frontmatter start
-            start = text.index("---\nname:")
-            draft = text[start:]
-            # Strip trailing ``` if present
-            if "```" in draft:
-                draft = draft[:draft.rindex("```")]
+        if "CONFIDENCE:" in text.upper() and "ACTION:" in text.upper() and "CONTENT:" in text.upper():
+            start = text.upper().index("CONFIDENCE:")
+            draft = text[start:].strip().strip("`").strip()
             log.info("[reflection] Got skill draft (%d chars)", len(draft))
-            return draft.strip()
+            return draft, reflection_usage
 
         log.info("[reflection] Response didn't contain a valid skill draft")
-        return None
+        return None, reflection_usage
 
     except Exception as e:
         log.warning("[reflection] Skill reflection failed: %s", str(e)[:200])
-        return None
+        return None, (0, 0, 0, 0)
 
 
 def _reflect_for_skill_openai(
@@ -790,7 +802,7 @@ def _reflect_for_skill_openai(
     tools: list[dict],
     max_tokens: int,
     log: logging.Logger,
-) -> str | None:
+) -> tuple[str | None, tuple[int, int, int, int]]:
     """OpenAI-compatible skill reflection."""
     reflect_messages = messages + [
         {"role": "user", "content": SKILL_REFLECTION_PROMPT}
@@ -806,25 +818,24 @@ def _reflect_for_skill_openai(
             params["tools"] = tools
         response = client.chat.completions.create(**params)
         text = response.choices[0].message.content or ""
+        reflection_usage = _openai_usage(getattr(response, "usage", None))
 
-        if not text or "NO_SKILL_NEEDED" in text:
+        if not text or "ACTION: NONE" in text.upper():
             log.info("[reflection] Solver declined: no skill needed")
-            return None
+            return None, reflection_usage
 
-        if "---\nname:" in text:
-            start = text.index("---\nname:")
-            draft = text[start:]
-            if "```" in draft:
-                draft = draft[:draft.rindex("```")]
+        if "CONFIDENCE:" in text.upper() and "ACTION:" in text.upper() and "CONTENT:" in text.upper():
+            start = text.upper().index("CONFIDENCE:")
+            draft = text[start:].strip().strip("`").strip()
             log.info("[reflection] Got skill draft (%d chars)", len(draft))
-            return draft.strip()
+            return draft, reflection_usage
 
         log.info("[reflection] Response didn't contain a valid skill draft")
-        return None
+        return None, reflection_usage
 
     except Exception as e:
         log.warning("[reflection] Skill reflection failed: %s", str(e)[:200])
-        return None
+        return None, (0, 0, 0, 0)
 
 
 def _to_openai_tools(tools: list[dict]) -> list[dict]:

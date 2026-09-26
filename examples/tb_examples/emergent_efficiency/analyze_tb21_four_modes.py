@@ -283,6 +283,47 @@ def main() -> int:
     ax.grid(axis="y", alpha=.25)
     savefig(figures / "06_behavior_relative.png")
 
+    # Figure 7: distinguish the shared normal-evolution layer from optional
+    # cost-aware proposal modules.  Older runs may contain solver drafts that
+    # were not parseable by GuidedSynthesis; keeping all three counts visible
+    # prevents "proposal generated" from being mistaken for "proposal applied".
+    evolution_rows = []
+    for mode in MODE_ORDER:
+        emergence = runs[mode]["path"] / "emergence"
+        normal_records = []
+        normal_path = emergence / "normal_evolution.jsonl"
+        if normal_path.exists():
+            normal_records = [
+                json.loads(line) for line in normal_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        adoption_path = emergence / "proposal_adoption.json"
+        adoptions = json.loads(adoption_path.read_text(encoding="utf-8")) if adoption_path.exists() else []
+        evolution_rows.append({
+            "mode": mode,
+            "solver_proposals": sum(int(r.get("solver_proposals", 0) or 0) for r in normal_records),
+            "normal_parsed": sum(int(r.get("result", {}).get("proposals", 0) or 0) for r in normal_records),
+            "normal_applied": sum(len(r.get("result", {}).get("applied", []) or []) for r in normal_records),
+            "module_applied": sum(1 for r in adoptions if str(r.get("status")) == "applied"),
+        })
+    evolution = pd.DataFrame(evolution_rows).set_index("mode")
+    evolution.to_csv(out / "evolution_activity.csv")
+    fig, ax = plt.subplots(figsize=(11, 6))
+    evo_metrics = ["solver_proposals", "normal_parsed", "normal_applied", "module_applied"]
+    labels = ["Solver drafts", "Normal parsed", "Normal applied", "Extra module applied"]
+    width = .19
+    for idx, mode in enumerate(MODE_ORDER):
+        vals = evolution.loc[mode, evo_metrics].to_numpy(dtype=float)
+        bars = ax.bar(np.arange(len(evo_metrics)) + (idx-1.5)*width, vals, width,
+                      color=COLORS[mode], label=SHORT[mode])
+        ax.bar_label(bars, fmt="%.0f", fontsize=8, padding=2)
+    ax.set_xticks(range(len(evo_metrics)), labels)
+    ax.set_ylabel("Count")
+    ax.set_title("Evolution activity by layer")
+    ax.legend(ncol=2)
+    ax.grid(axis="y", alpha=.25)
+    savefig(figures / "07_evolution_activity.png")
+
     # Markdown report.
     metric_specs = [
         ("Success", "success", lambda x:f"{int(x)}/20", None),
@@ -349,6 +390,23 @@ def main() -> int:
               "- `paired_success_changes.csv`：任务级新增/丢失通过统计。",
               "- `batch_comparison.csv`：五个 batch 的趋势数据。",
               "- `cost_components.csv`：输入、输出与 cache 成本拆分。", ""]
+    lines += ["## 11. 进化活动核验", "",
+              "| 模式 | Solver drafts | Normal 成功解析 | Normal 实际应用 | 附加模块实际应用 |",
+              "|---|---:|---:|---:|---:|"]
+    for mode in MODE_ORDER:
+        row = evolution.loc[mode]
+        lines.append(
+            f"| {mode} | {int(row.solver_proposals)} | {int(row.normal_parsed)} | "
+            f"{int(row.normal_applied)} | {int(row.module_applied)} |"
+        )
+    lines += ["", "![进化活动](figures/07_evolution_activity.png)", "",
+              "这四组结果生成于 Terminal proposal 协议修复之前：虽然每组产生了 15–16 个 solver drafts，"
+              "但旧 YAML/Markdown 格式未被 GuidedSynthesis 解析，因此 normal evolution 的解析和应用均为 0。"
+              "Cost-aware 与 category-seeded 的附加模块分别实际应用 8 和 7 条提案。修复后的新运行应单独比较，"
+              "不能把本报告中的 normal evolution 视为已经生效。", "",
+              "此外，这些历史结果没有记录 reflection 调用的 token；报告中的 token 与 cost 是旧口径，"
+              "会轻微低估所有模式的真实消耗。修复后生成的新结果将包含这部分 usage。", "",
+              "新增产物：`evolution_activity.csv` 及 `figures/07_evolution_activity.png`。", ""]
     (out / "REPORT_CN.md").write_text("\n".join(lines), encoding="utf-8")
     print(out.resolve())
     return 0

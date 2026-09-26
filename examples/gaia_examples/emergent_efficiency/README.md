@@ -59,15 +59,15 @@ and `2023/validation/metadata.level3.parquet`, together with its attachments.
 python examples/gaia_examples/emergent_efficiency/run_emergent_efficiency_gaia.py \
   --dataset-dir /mnt/cache/modelscope/datasets/AI-ModelScope--GAIA/snapshots/master \
   --mode normal-evolve \
-  --limit 2 \
-  --batch-size 1 \
-  --parallel 1
+  --batch-size 4 \
+  --parallel 2
 ```
 
 ## Full five-condition matrix
 
 ```bash
 bash examples/gaia_examples/emergent_efficiency/run_matrix.sh gaia_l3 \
+  --dataset-dir /mnt/cache/modelscope/datasets/AI-ModelScope--GAIA/snapshots/master \
   --batch-size 4 \
   --parallel 2
 ```

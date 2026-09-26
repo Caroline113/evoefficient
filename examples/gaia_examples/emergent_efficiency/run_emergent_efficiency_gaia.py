@@ -86,7 +86,7 @@ def _core(task: GaiaTask) -> Task:
 def _write_artifact(path: Path, value: Any, text: bool = False) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(str(value) if text else json.dumps(value, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-    return str(path)
+    return str(path.resolve())
 
 
 def _conversation_steps(conversation: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -163,6 +163,10 @@ def _normalize(raw: dict[str, Any], task: GaiaTask, agent: GaiaAgent, output: Pa
         "conversation_path": conversation_path, "steps": steps, "batch": batch, "mode": mode,
         "error": raw.get("error", ""), "timed_out": raw.get("timed_out", False),
         "skill_proposal": str(raw.get("skill_proposal") or ""),
+        "solver_metrics_usage": raw.get("solver_metrics_usage", {}),
+        "solver_message_usage": raw.get("solver_message_usage", {}),
+        "proposal_usage": raw.get("proposal_usage", {}),
+        "usage_consistency": raw.get("usage_consistency", {}),
         "metadata": {**_core(task).metadata, "file_attached": bool(task.file_path)},
     }
     result = _swe._attach_usage_fields(result)
@@ -176,7 +180,11 @@ def _solve_batch(tasks: list[GaiaTask], agent: GaiaAgent, output: Path, batch: i
         solved = agent.solve_task(question=task.question, attachment=task.file_path, timeout_sec=args.task_timeout)
         return task, {"answer": solved.answer, "raw_output": solved.raw_output, "conversation": solved.conversation,
                       "usage": solved.usage, "elapsed": solved.elapsed, "timed_out": solved.timed_out,
-                      "error": solved.error, "skill_proposal": solved.skill_proposal}
+                      "error": solved.error, "skill_proposal": solved.skill_proposal,
+                      "solver_metrics_usage": solved.solver_metrics_usage,
+                      "solver_message_usage": solved.solver_message_usage,
+                      "proposal_usage": solved.proposal_usage,
+                      "usage_consistency": solved.usage_consistency}
     with ThreadPoolExecutor(max_workers=args.parallel) as pool:
         futures = {pool.submit(solve, task): task for task in tasks}
         for future in as_completed(futures):
@@ -254,7 +262,9 @@ def main() -> int:
     manifest={"benchmark":"gaia_2023","split":"validation","level":3,"expected_full_task_count":26,"mode":args.mode,"tasks":[t.task_id for t in tasks],"task_count":len(tasks),"batch_size":args.batch_size,"parallel":args.parallel,"model_id":args.model_id,"evolver_model":args.evolver_model or args.model_id,"seed_workspace":args.seed_workspace,"created_at":datetime.now().isoformat(timespec="seconds")}; _write_artifact(output/"experiment_manifest.json",manifest)
     core={t.task_id:_core(t) for t in tasks}; agent=GaiaAgent(
         workspace,args.model_id,args.region,args.max_tokens,
-        enable_skill_proposal=args.mode == "normal-evolve",
+        # Match SWE: ordinary solver-proposal evolution is shared by all
+        # modes; cost-aware/predefined modes add their own modules afterward.
+        enable_skill_proposal=True,
     ); all_results=[]
     print(f"GAIA validation Level 3: {len(tasks)} tasks / {len(batches)} batches\nOutput: {output.resolve()}")
     for index,batch_tasks in enumerate(batches,1):

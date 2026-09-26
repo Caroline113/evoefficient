@@ -117,7 +117,11 @@ def _solve_one_task(
     task_log = None
     task_log_dir = None
     t0 = time.time()
+    solve_t0 = t0
     container = None
+    conversation = []
+    usage = {}
+    skill_draft = None
 
     try:
         task_log, task_log_dir = _setup_task_logger(task_name, log_dir)
@@ -261,10 +265,6 @@ def _solve_one_task(
         solve_t0 = time.time()
         timeout_sec = task.metadata.get("agent_timeout_sec", 900)
 
-        conversation = []
-        usage = {}
-        skill_draft = None
-
         if solver == "react":
             from agent_evolve.agents.terminal.react_solver import (
                 react_solve, extract_conversation,
@@ -325,7 +325,36 @@ def _solve_one_task(
                     pass
 
             try:
-                conversation = _extract_conversation(agent.messages)
+                raw_messages = list(agent.messages or [])
+                conversation = _extract_conversation(raw_messages)
+                message_usage = {
+                    "input_tokens": 0, "output_tokens": 0,
+                    "cache_read_input_tokens": 0, "cache_write_input_tokens": 0,
+                }
+                for message in raw_messages:
+                    metadata = message.get("metadata", {}) if isinstance(message, dict) else {}
+                    raw = metadata.get("usage", {}) if isinstance(metadata, dict) else {}
+                    message_usage["input_tokens"] += int(raw.get("inputTokens", 0) or 0)
+                    message_usage["output_tokens"] += int(raw.get("outputTokens", 0) or 0)
+                    message_usage["cache_read_input_tokens"] += int(raw.get("cacheReadInputTokens", 0) or 0)
+                    message_usage["cache_write_input_tokens"] += int(raw.get("cacheWriteInputTokens", 0) or 0)
+                message_usage["total_tokens"] = (
+                    message_usage["input_tokens"] + message_usage["output_tokens"]
+                )
+                metrics_total = int(usage.get("total_tokens", 0) or 0)
+                message_total = int(message_usage["total_tokens"] or 0)
+                if metrics_total and message_total and not 0.80 <= metrics_total / message_total <= 1.20:
+                    task_log.warning(
+                        "Usage mismatch metrics=%d messages=%d; selecting message metadata",
+                        metrics_total, message_total,
+                    )
+                    usage = message_usage
+                    usage["usage_record_quality"] = "inconsistent"
+                    usage["usage_source"] = "message_metadata_inconsistent_metrics"
+                elif not metrics_total and message_total:
+                    usage = message_usage
+                    usage["usage_record_quality"] = "ok"
+                    usage["usage_source"] = "message_metadata"
             except Exception:
                 pass
 
@@ -419,13 +448,16 @@ def _solve_one_task(
             "passed": False,
             "eval_output": f"ERROR: {err_msg}",
             "model_name_or_path": model_id,
-            "usage": {},
-            "solve_time": 0,
+            # Preserve completed model-call accounting and trajectory context
+            # when a later Docker/evaluation/artifact step fails.
+            "usage": usage,
+            "solve_time": max(0.0, time.time() - solve_t0),
             "total_time": elapsed,
-            "conversation_turns": 0,
-            "conversation": [],
+            "conversation_turns": len(conversation),
+            "conversation": conversation,
             "metadata": task.metadata,
             "status": "error",
+            "skill_draft": skill_draft,
         }
         _write_result(output_file, result)
         return result

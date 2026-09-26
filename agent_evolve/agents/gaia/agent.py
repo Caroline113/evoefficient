@@ -33,6 +33,10 @@ class GaiaSolveResult:
     timed_out: bool = False
     error: str = ""
     skill_proposal: str = ""
+    solver_metrics_usage: dict[str, Any] = field(default_factory=dict)
+    solver_message_usage: dict[str, Any] = field(default_factory=dict)
+    proposal_usage: dict[str, Any] = field(default_factory=dict)
+    usage_consistency: dict[str, Any] = field(default_factory=dict)
 
 
 class GaiaAgent(BaseAgent):
@@ -81,6 +85,38 @@ class GaiaAgent(BaseAgent):
                 totals[key] += int(usage.get(key, 0) or 0)
         return totals if found else {}
 
+    @staticmethod
+    def _select_solver_usage(
+        metrics_usage: dict[str, Any], message_usage: dict[str, Any], *, tolerance: float = 0.20
+    ) -> tuple[dict[str, Any], str, dict[str, Any]]:
+        """Select usage while detecting duplicated/incomplete Strands aggregates."""
+        metrics = normalize_usage(metrics_usage) if metrics_usage else {}
+        messages = normalize_usage(message_usage) if message_usage else {}
+        metrics_total = int(metrics.get("total_tokens", 0) or 0)
+        message_total = int(messages.get("total_tokens", 0) or 0)
+        details = {
+            "metrics_total_tokens": metrics_total,
+            "message_total_tokens": message_total,
+            "tolerance": tolerance,
+            "status": "missing",
+            "selected": "none",
+        }
+        if metrics_total and message_total:
+            ratio = metrics_total / message_total
+            details["metrics_to_messages_ratio"] = ratio
+            if not (1.0 - tolerance <= ratio <= 1.0 + tolerance):
+                details.update(status="inconsistent", selected="messages")
+                return message_usage, "gaia_message_metadata_inconsistent_metrics", details
+            details.update(status="consistent", selected="metrics")
+            return metrics_usage, "gaia_strands_metrics", details
+        if metrics_total:
+            details.update(status="metrics_only", selected="metrics")
+            return metrics_usage, "gaia_strands_metrics", details
+        if message_total:
+            details.update(status="messages_only", selected="messages")
+            return message_usage, "gaia_message_metadata", details
+        return {}, "gaia_usage_missing", details
+
     def _propose_intervention(
         self,
         *,
@@ -88,10 +124,10 @@ class GaiaAgent(BaseAgent):
         answer: str,
         error: str,
         conversation: list[dict[str, Any]],
-    ) -> str:
+    ) -> tuple[str, dict[str, Any]]:
         """Produce the structured solver proposal consumed by GuidedSynthesisEngine."""
         if not self.enable_skill_proposal:
-            return ""
+            return "", {}
         tool_names: list[str] = []
         for message in conversation:
             for block in message.get("content", []) if isinstance(message.get("content"), list) else []:
@@ -126,10 +162,11 @@ ACTION: NONE
                 [LLMMessage(role="user", content=prompt)], max_tokens=2048, temperature=0.2
             )
             proposal = str(response.content or "").strip()
-            return proposal if "ACTION:" in proposal.upper() and "CONFIDENCE:" in proposal.upper() else ""
+            valid = "ACTION:" in proposal.upper() and "CONFIDENCE:" in proposal.upper()
+            return (proposal if valid else ""), dict(response.usage or {})
         except Exception as exc:
             logger.warning("GAIA intervention proposal failed: %s", exc)
-            return ""
+            return "", {}
 
     def _price_profile(self) -> dict[str, Any]:
         path = self.workspace.root / "efficiency" / "cost_profile.yaml"
@@ -272,30 +309,48 @@ ACTION: NONE
         raw_output = str(response or "")
         messages = getattr(agent, "messages", [])
         conversation = self._conversation(messages)
-        raw_usage: dict[str, Any] = {}
+        metrics_usage: dict[str, Any] = {}
         if response is not None:
-            try: raw_usage = dict(response.metrics.accumulated_usage or {})
+            try: metrics_usage = dict(response.metrics.accumulated_usage or {})
             except Exception: pass
-        usage_source = "gaia_strands_metrics"
-        if not raw_usage:
-            raw_usage = self._raw_usage_from_messages(messages)
-            if raw_usage:
-                usage_source = "gaia_message_metadata"
+        message_usage = self._raw_usage_from_messages(messages)
+        raw_usage, usage_source, usage_consistency = self._select_solver_usage(
+            metrics_usage, message_usage
+        )
+        solver_usage_found = bool(raw_usage)
         provider, selected_model = resolve_model_selection(self.model_id, route_level="hard")
+        answer = self._extract_answer(raw_output, submitted["answer"])
+        skill_proposal, proposal_usage = self._propose_intervention(
+            question=question, answer=answer, error=error, conversation=conversation
+        )
+        if proposal_usage:
+            solver_usage = normalize_usage(raw_usage)
+            reflection_usage = normalize_usage(proposal_usage)
+            raw_usage = {
+                key: int(solver_usage.get(key, 0) or 0) + int(reflection_usage.get(key, 0) or 0)
+                for key in (
+                    "input_tokens", "output_tokens", "cache_read_input_tokens",
+                    "cache_write_input_tokens",
+                )
+            }
+            usage_source += "+gaia_skill_proposal"
         usage = normalize_usage(
             raw_usage, price_profile=self._price_profile(), model_id=selected_model,
             provider=provider, route_level="hard",
-            usage_record_quality="ok" if raw_usage else "missing",
+            usage_record_quality=(
+                "inconsistent" if usage_consistency.get("status") == "inconsistent"
+                else "ok" if solver_usage_found else "partial" if proposal_usage else "missing"
+            ),
             usage_source=usage_source, usage_estimated=False,
-        )
-        answer = self._extract_answer(raw_output, submitted["answer"])
-        skill_proposal = self._propose_intervention(
-            question=question, answer=answer, error=error, conversation=conversation
         )
         return GaiaSolveResult(
             answer=answer, raw_output=raw_output, conversation=conversation, usage=usage,
             elapsed=time.time()-started, timed_out=timed_out, error=error,
             skill_proposal=skill_proposal,
+            solver_metrics_usage=normalize_usage(metrics_usage) if metrics_usage else {},
+            solver_message_usage=normalize_usage(message_usage) if message_usage else {},
+            proposal_usage=normalize_usage(proposal_usage) if proposal_usage else {},
+            usage_consistency=usage_consistency,
         )
 
     def solve(self, task):
