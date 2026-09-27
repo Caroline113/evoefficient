@@ -14,9 +14,9 @@ RUN_NAME="${1:?Usage: $0 <RUN_NAME> [shared runner flags]}"
 shift
 
 MODES=(
-  # normal-evolve
+  normal-evolve
   cost-aware
-  predefined-control
+  # predefined-control
   # predefined-cost-aware
   # category-seeded-cost-aware
 )

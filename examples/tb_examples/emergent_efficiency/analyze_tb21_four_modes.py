@@ -117,6 +117,11 @@ def main() -> int:
             "repeated_exact_inputs": int(runs[mode]["behavior"]["overall"]["repeated_exact_inputs"]),
             "prompt_fragment_visible_tasks": int(runs[mode]["behavior"]["overall"]["prompt_fragment_visible_tasks"]),
             "zero_token_tasks": int(o["zero_token_tasks"]),
+            "usage_ok": int(o.get("usage_quality_counts", {}).get("ok", 0)),
+            "usage_missing": int(o.get("usage_quality_counts", {}).get("missing", 0)),
+            "usage_inconsistent": int(o.get("usage_quality_counts", {}).get("inconsistent", 0)),
+            "errors": sum(bool(r.get("error")) for r in runs[mode]["results"]),
+            "timeouts": sum(bool(r.get("timed_out")) for r in runs[mode]["results"]),
         })
     overall = pd.DataFrame(rows).set_index("mode")
     base = overall.loc["normal-evolve"]
@@ -324,7 +329,8 @@ def main() -> int:
     ax.grid(axis="y", alpha=.25)
     savefig(figures / "07_evolution_activity.png")
 
-    # Markdown report.
+    # Markdown report.  Keep all conclusions data-driven so the same script can
+    # be safely reused when a newer complete run appears.
     metric_specs = [
         ("Success", "success", lambda x:f"{int(x)}/20", None),
         ("Success rate", "success_rate", lambda x:f"{x*100:.1f}%", "success_rate_delta_pp"),
@@ -336,10 +342,19 @@ def main() -> int:
         ("Turns", "turns", lambda x:f"{int(x):,}", "turns_delta_pct"),
         ("Wall time", "wall_time_s", lambda x:f"{x/3600:.2f}h", "wall_time_s_delta_pct"),
     ]
-    lines = ["# Terminal-Bench 2.1 四组涌现效率实验对比报告", "",
-             "## 1. 实验与数据完整性", "",
-             f"四组实验使用完全相同的 {len(baseline_tasks)} 个任务、batch size=4、parallel=2，主模型与 evolver 均为 `deepseek:deepseek-v4-flash`。每组均有 20/20 个任务使用 USD 价格表（`profile:route:hard`），因此 cost 可以直接比较。", "",
-             "相对变化均以 **normal-evolve** 为基线。成功率使用百分点（pp）；其余指标使用相对百分比。负值表示数值下降，不自动代表更好（成功率越高越好，成本/token/tool calls 越低通常越好）。", "",
+    cohort = {m: ("修复后协议" if evolution.loc[m, "normal_parsed"] > 0 else "旧协议") for m in MODE_ORDER}
+    best_success = overall.success_rate.idxmax()
+    lowest_cost = overall.cost_usd.idxmin()
+    lowest_cpp = overall.cost_per_success.idxmin()
+    lines = ["# Terminal-Bench 2.1 最新四模式实验分析报告", "",
+             "## 1. 运行选择与可比性", "",
+             f"四组均为各模式目录中最新的完整运行，覆盖完全相同的 {len(baseline_tasks)} 个任务；batch size=4、parallel=2，主模型和 evolver 均为 `deepseek:deepseek-v4-flash`。", "",
+             "| 模式 | 运行目录 | 创建时间 | 协议代际 |", "|---|---|---|---|"]
+    for mode in MODE_ORDER:
+        lines.append(f"| {SHORT[mode]} | `{paths[mode].name}` | {runs[mode]['manifest'].get('created_at','')} | {cohort[mode]} |")
+    lines += ["", "**重要限制：**Normal 与 Cost-aware 是 proposal/usage 修复后的 9月26–27日运行；Category-seeded 与 Predefined 最新完整结果仍来自 9月20日旧协议。"
+              "四组任务和模型相同，因此 verifier 成功率可作描述性配对；但旧协议没有成功解析 normal evolution，且未纳入后来补记的 reflection usage，故跨协议 token/cost 不能完全归因于模式。", "",
+             "相对变化以最新 Normal 为基线；成功率使用百分点（pp），其余指标使用相对百分比。", "",
              "## 2. 核心结果", "",
              "| 指标 | Normal | Cost-aware（相对值） | Category-seeded（相对值） | Predefined（相对值） |", "|---|---:|---:|---:|---:|"]
     for label, metric, formatter, delta_col in metric_specs:
@@ -354,11 +369,11 @@ def main() -> int:
 
     lines += ["", "![总体指标](figures/01_overall_metrics.png)", "", "![成功率与成本](figures/02_success_cost_frontier.png)", "",
               "## 3. 主要发现", "",
-              "- **最高成功率：category-seeded-cost-aware，18/20（90%）**，比 normal 高 10 pp；总成本 $80.6823，下降 26.1%；每成功任务成本约 $4.4824，下降 34.3%。",
-              "- **最低总成本：cost-aware，$62.5781**，比 normal 下降 42.7%，但成功率降至 70%（-10 pp）。因此它更省钱，但可靠性明显较弱。",
-              "- **最低非缓存 token：predefined-control，1,104,032**，比 normal 下降 9.3%；成功率为 85%（+5 pp），总成本下降 35.1%，是较均衡的方案。",
-              "- normal-evolve 的总成本最高（$109.2166）。主要原因不是非缓存 token，而是 cache-read token 达到 70.63M；其 cache-read 成本占总成本的大部分。",
-              "- 四组非缓存 token 总量很接近（最大差约 9%），但成本差异达到 43%。在当前价格表下，cache read 的规模是成本差异的核心驱动。", "",
+              f"- **最高成功率：{SHORT[best_success]}，{int(overall.loc[best_success,'success'])}/{len(baseline_tasks)}（{overall.loc[best_success,'success_rate']*100:.1f}%）**。",
+              f"- **最低记录成本：{SHORT[lowest_cost]}，${overall.loc[lowest_cost,'cost_usd']:.4f}**；最低记录 cost/pass 是 {SHORT[lowest_cpp]}（${overall.loc[lowest_cpp,'cost_per_success']:.4f}）。后者属于旧协议，不能直接解释为模块带来的节省。",
+              f"- 修复后同代际比较中，Cost-aware 相对 Normal 成功率 {overall.loc['cost-aware','success_rate_delta_pp']:+.1f} pp，成本 {overall.loc['cost-aware','cost_usd_delta_pct']:+.1f}%，token {overall.loc['cost-aware','tokens_delta_pct']:+.1f}%，cost/pass {overall.loc['cost-aware','cost_per_success_delta_pct']:+.1f}%。",
+              f"- 最新 Normal 与 Cost-aware 分别为 {int(overall.loc['normal-evolve','success'])}/20 和 {int(overall.loc['cost-aware','success'])}/20；Cost-aware 多通过 1 题，但记录成本高 ${overall.loc['cost-aware','cost_usd']-overall.loc['normal-evolve','cost_usd']:.2f}。",
+              "- 成本主要受 cache-read 规模驱动；图中的总 token 不包含 cache-read，因此不能只看非缓存 token 判断成本。", "",
               "## 4. 配对任务结果", "",
               "| 模式 | 相对 Normal 新增通过 | 相对 Normal 丢失通过 | 两者都通过 | 两者都失败 |", "|---|---:|---:|---:|---:|"]
     for mode in MODE_ORDER[1:]:
@@ -366,24 +381,21 @@ def main() -> int:
         lines.append(f"| {mode} | {p.gained_vs_normal} | {p.lost_vs_normal} | {p.both_pass} | {p.both_fail} |")
     lines += ["", "![逐任务结果](figures/04_task_outcomes.png)", "",
               "配对比较说明，整体成功率变化并非所有任务一致变好或变差，而是不同模式在具体任务上发生成功/失败交换。完整逐任务状态、成本及相对成本变化见 `per_task_comparison.csv`。", "",
-              "## 5. 分批趋势与进化过程", "", "![分批趋势](figures/03_batch_trajectories.png)", "",
-              "- normal 在第 2 批出现明显成本尖峰（$82.91），主要由高 cache 使用和长轨迹任务推动；后两个 batch 均达到 100% 成功。",
-              "- category-seeded 在第 2、3、5 批达到 100%，但第 3 批成本最高；第 4 批耗时较长但模型成本很低，说明 wall time 与 token cost 不完全同步。",
-              "- cost-aware 五个 batch 的成功率为 75%、75%、75%、50%、75%，省成本效果稳定，但没有转化为更高成功率。",
-              "- predefined-control 在第 2、3、5 批均为 100%，后期成本也较低，呈现较好的综合稳定性。", "",
+              "## 5. 分批趋势", "", "![分批趋势](figures/03_batch_trajectories.png)", "",
+              "各 batch 的成功率、成本、token、工具调用和累计运行时间见 `batch_comparison.csv`。单批仅 4 题，25 个百分点即对应 1 题，不宜把折线波动解释为稳定学习趋势。", "",
               "## 6. 成本组成与 cache", "", "![成本组成](figures/05_cost_composition.png)", "",
-              "当前价格表对 uncached input、output、cache read、cache write 分别计价。本次四组 cache write 均为 0；cache read 分别为 Normal 70.63M、Cost-aware 39.44M、Category-seeded 51.68M、Predefined 45.12M。由于 cache read 远大于非缓存输入，降低 cache-read 规模是总成本下降的主要来源。", "",
+              f"Cache read 分别为 Normal {overall.loc['normal-evolve','cache_read_tokens']/1e6:.2f}M、Cost-aware {overall.loc['cost-aware','cache_read_tokens']/1e6:.2f}M、Category-seeded {overall.loc['category-seeded-cost-aware','cache_read_tokens']/1e6:.2f}M、Predefined {overall.loc['predefined-control','cache_read_tokens']/1e6:.2f}M。成本拆分见 `cost_components.csv`。", "",
               "## 7. 操作行为", "", "![操作行为相对值](figures/06_behavior_relative.png)", "",
-              f"- cost-aware 的工具调用为 {int(overall.loc['cost-aware','tool_calls'])}（{fmt_delta(overall.loc['cost-aware','tool_calls_delta_pct'])}），重复精确输入仅 {int(overall.loc['cost-aware','repeated_exact_inputs'])} 次，是四组最低。",
-              f"- category-seeded 工具调用为 {int(overall.loc['category-seeded-cost-aware','tool_calls'])}，接近 normal，但成功率更高、成本更低。",
-              f"- predefined-control 工具调用下降到 {int(overall.loc['predefined-control','tool_calls'])}，但重复精确输入增至 {int(overall.loc['predefined-control','repeated_exact_inputs'])} 次，说明减少调用总量并不等同于减少重复行为。", "",
+              f"修复后 Cost-aware 的工具调用为 {int(overall.loc['cost-aware','tool_calls'])}，相对最新 Normal {fmt_delta(overall.loc['cost-aware','tool_calls_delta_pct'])}；turns 变化 {fmt_delta(overall.loc['cost-aware','turns_delta_pct'])}，累计 wall time 变化 {fmt_delta(overall.loc['cost-aware','wall_time_s_delta_pct'])}。", "",
               "## 8. 数据质量与解释限制", "",
-              "- `compile-compcert` 在 category-seeded 和 cost-aware 中失败且 usage 为 0。对应运行目录存在 raw error，因此这两组总成本被轻微低估；不能把零成本理解为有效节省。",
-              "- 每种模式只有单次 20-task 运行，没有多随机种子重复。成功率相差 1–2 个任务时，应视为描述性结果，而不是统计显著性结论。",
+              f"- Zero-token 任务：Normal {int(overall.loc['normal-evolve','zero_token_tasks'])}、Cost-aware {int(overall.loc['cost-aware','zero_token_tasks'])}、Category-seeded {int(overall.loc['category-seeded-cost-aware','zero_token_tasks'])}、Predefined {int(overall.loc['predefined-control','zero_token_tasks'])}。Category-seeded 的零 usage 会低估其成本。",
+              f"- Usage missing：Normal {int(overall.loc['normal-evolve','usage_missing'])}、Cost-aware {int(overall.loc['cost-aware','usage_missing'])}、Category-seeded {int(overall.loc['category-seeded-cost-aware','usage_missing'])}、Predefined {int(overall.loc['predefined-control','usage_missing'])}。",
+              "- 每种模式只有一次最新 20-task 运行，没有多随机种子重复；1 题即 5 个百分点，差异应视为描述性结果。",
               "- wall time 是各任务耗时求和，并非 parallel=2 下的实际端到端时钟时间；适合衡量累计计算负担，不等于用户等待时间。",
-              "- 四组运行时间不同，外部 API、网络和 Docker 下载波动可能影响 wall time，但不会改变 verifier pass/fail 与记录的 token。", "",
+              "- 四组跨越两个协议代际和不同日期；外部 API、网络、容器状态也可能造成波动。", "",
               "## 9. 结论与建议", "",
-              "若目标是**最高成功率且兼顾成本**，本次结果支持 category-seeded-cost-aware；若目标是**最低 API 成本**，cost-aware 最低，但需要接受成功率下降；若需要**更稳健的成功率/成本折中**，predefined-control 在本次样本中最均衡。建议下一步对三种候选模式至少重复 3–5 个随机种子，并优先复查 `compile-compcert` 的零 usage 错误，再报告均值、标准差和置信区间。", "",
+              "最新结果中 Category-seeded 的记录成功率最高，但它与最新 Normal/Cost-aware 不属于同一协议代际，不能据此给出公平的四模式效率排名。"
+              "可直接比较的修复后结果显示 Cost-aware 比 Normal 多通过 1 题，非缓存 token 略少，但 cache-read 和总成本明显更高。建议优先用当前修复后代码补跑 Category-seeded 与 Predefined，随后四模式各重复至少 3 次，再报告均值、标准差和配对胜负。", "",
               "## 10. 产物索引", "",
               "- `overall_comparison.csv`：总体指标及相对 normal 的变化。",
               "- `per_task_comparison.csv`：逐任务成功、token、cache、cost 和相对变化。",
@@ -400,13 +412,9 @@ def main() -> int:
             f"{int(row.normal_applied)} | {int(row.module_applied)} |"
         )
     lines += ["", "![进化活动](figures/07_evolution_activity.png)", "",
-              "这四组结果生成于 Terminal proposal 协议修复之前：虽然每组产生了 15–16 个 solver drafts，"
-              "但旧 YAML/Markdown 格式未被 GuidedSynthesis 解析，因此 normal evolution 的解析和应用均为 0。"
-              "Cost-aware 与 category-seeded 的附加模块分别实际应用 8 和 7 条提案。修复后的新运行应单独比较，"
-              "不能把本报告中的 normal evolution 视为已经生效。", "",
-              "此外，这些历史结果没有记录 reflection 调用的 token；报告中的 token 与 cost 是旧口径，"
-              "会轻微低估所有模式的真实消耗。修复后生成的新结果将包含这部分 usage。", "",
-              "新增产物：`evolution_activity.csv` 及 `figures/07_evolution_activity.png`。", ""]
+              "最新 Normal 与 Cost-aware 均已成功解析 16 个 normal-evolution 提案；Cost-aware 实际应用 5 个，而 Normal 实际应用仍为 0。"
+              "Category-seeded 与 Predefined 仍是旧协议结果，normal parsed/applied 均为 0。这验证了四组存在协议代际差异，也是不能直接比较其 token/cost 的主要原因。", "",
+              "进化明细见 `evolution_activity.csv`。", ""]
     (out / "REPORT_CN.md").write_text("\n".join(lines), encoding="utf-8")
     print(out.resolve())
     return 0
