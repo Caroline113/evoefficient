@@ -1,0 +1,6 @@
+{
+  "python": "3.11.15",
+  "yaml_import": true,
+  "openai_import": true,
+  "relocation_verified": true
+}

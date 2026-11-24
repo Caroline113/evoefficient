@@ -1,0 +1,54 @@
+{
+  "date": "2026-11-07",
+  "tests": {
+    "command": "python -m pytest examples/tb_examples/emergent_efficiency_train_eval/tests -q",
+    "passed": 15,
+    "observed_before_this_record": true
+  },
+  "python_compileall": true,
+  "shell_syntax": true,
+  "harbor_schema_checks": "passed separately in Harbor venv; exact one-task path and separate verifier support verified",
+  "original_source_unchanged_during_checks": true,
+  "original_source_snapshot": {
+    "README.md": "fc1bd860e8fa23ebb63d718f320606e97af8154d4e92c50d728780fcdb6cf08a",
+    "VALIDATION_20261101.md": "c28a6527641386d864a950c37df406de321f20252e039e65dd3a0061ca8402c6",
+    "VALIDATION_STRATEGY_ONLY.md": "719dfcdf19fd0246f4ec348b1cc07bbc7c914f233d1e3fffffaf74490ba72c53",
+    "__init__.py": "4f80d1d225fe055d47326881a5fbb20a15115ebfe59e0ea2529b0fed7d1ac6d8",
+    "experiment_controls.py": "69f17b6a8342bcbcbd0fd1c4b1fb9744ca397a5236a3eb26b8da6529f9d96ce1",
+    "run_emergent_efficiency_tb_adaptive_harbor.py": "87c9a5ce4cf7357cf1c9989846a8bb357f53937227aa51cb78e7d8399ac744a4",
+    "run_matrix_harbor.sh": "9e35ff259b7ac3bc992d261e1253fb5a5d36dfb9dd506038ea62a7b6fdca733c",
+    "run_one_harbor.sh": "32194710b98f534e64a82df95f2934c3561e436777e287d3c1187dca4620c9c4",
+    "tests/test_experiment_controls.py": "6e81196bed5c3c597cd4954f808cdcf8cdfaab78f9fd120d1206505048e37167",
+    "trace_stats.py": "dda84403343408590a9b64921dbcbbeea18fc2e66202b0299a0670d42fb5f924"
+  },
+  "new_source_snapshot": {
+    "README.md": "d550ab01f141988178c1a0339e9702efdbf18e71a5ebeec9cea62c5b2b39db5a",
+    "__init__.py": "729de51efe28966e688a4cfaaaeec10696966ac18cda348bf330f198aa0762c4",
+    "analyze_prefix_costs.py": "5fb25f4346f9475bb64830969b5140fb7d46097e910ed69fa024057f1966c1e9",
+    "analyze_previous_tb20.sh": "8d3292f4abb574d7834d3090cf2d49dcb6b253ceeede3d52b797c4195c300689",
+    "backend.py": "b73adeabb6440d08e1d928bdee9ea11c5621b2ec5ec5f71cf81d58d00d4a7ad6",
+    "common.py": "fe0d448d50d72deb0501b1dbdc2c59d45a2e7bfa2917f769cdd63417aad9a30b",
+    "create_demo_training.py": "30bfee21506c76d1cda5eae96e7a3427ed4ef2880bb39f4882068ae0447d5534",
+    "prepare_dataset.py": "708e879a0a28cd4791e7c2e3bbdcb6313624f48a720bbc547318021589f47da2",
+    "record_validation.py": "4927761fce91fcebd1ce60252bb416592f407ce2be376a2915f1fca0554a738e",
+    "run_experiment.py": "c3631e7a43c7da3f1e318b47ac81cc59428dc0b5b148160eea5e35f2cfae1117",
+    "run_matrix.sh": "b8e5b7bdbfab4a26ebb32ed7dd14661d3d2cd565e31e3bf58d8a35ab28835a05",
+    "tests/test_protocol.py": "3a138da3ce1315aaedd76f3f055703f41278a0eedade7f116d6ddc5c24497c2d",
+    "traces.py": "f767903826dc851173e2f3bb0c76cd731a78497a49a44040ca730fd4645342c9",
+    "validate_setup.py": "a02c9c983d79c895322b30edf30fcab59fd99c419825e5cbd6d1f3adc40b12a4"
+  },
+  "historical_prefix": {
+    "path": "/home/azureuser/zj/a-evolve-new7/a-evolve-new/logs/tb41_prefix_analysis/previous_tb20_20261107/prefix_analysis.json",
+    "tasks": 60,
+    "caps": [
+      20,
+      40,
+      80,
+      120
+    ],
+    "prefix_rows": 240,
+    "excluded": 0
+  },
+  "real_training_or_tb41_evaluation_executed": false,
+  "full_tb41_dataset_downloaded": false
+}

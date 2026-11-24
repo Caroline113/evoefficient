@@ -1,0 +1,69 @@
+{
+  "environments": {
+    "project_venv": {
+      "python": "3.11.15",
+      "executable": "/home/azureuser/zj/a-evolve-new7/a-evolve-new/.venv/bin/python",
+      "base_prefix": "/home/azureuser/anaconda3/envs/aevolve",
+      "prefix": "/home/azureuser/zj/a-evolve-new7/a-evolve-new/.venv",
+      "platform": "Linux-5.15.0-1063-azure-x86_64-with-glibc2.35",
+      "machine": "x86_64",
+      "libc": [
+        "glibc",
+        "2.35"
+      ],
+      "package_count": 145,
+      "source_package_count": 1,
+      "conda_managed_build_origins": []
+    },
+    "harbor_venv": {
+      "python": "3.13.17",
+      "executable": "/home/azureuser/zj/harbor/.venv/bin/python",
+      "base_prefix": "/home/azureuser/.local/share/uv/python/cpython-3.13.17-linux-x86_64-gnu",
+      "prefix": "/home/azureuser/zj/harbor/.venv",
+      "platform": "Linux-5.15.0-1063-azure-x86_64-with-glibc2.35",
+      "machine": "x86_64",
+      "libc": [
+        "glibc",
+        "2.35"
+      ],
+      "package_count": 310,
+      "source_package_count": 3,
+      "conda_managed_build_origins": []
+    },
+    "aevolve": {
+      "python": "3.11.15",
+      "executable": "/home/azureuser/anaconda3/envs/aevolve/bin/python",
+      "base_prefix": "/home/azureuser/anaconda3/envs/aevolve",
+      "prefix": "/home/azureuser/anaconda3/envs/aevolve",
+      "platform": "Linux-5.15.0-1063-azure-x86_64-with-glibc2.35",
+      "machine": "x86_64",
+      "libc": [
+        "glibc",
+        "2.35"
+      ],
+      "package_count": 150,
+      "source_package_count": 1,
+      "conda_managed_build_origins": [
+        {
+          "name": "conda-pack",
+          "python_metadata_version": "0.0.0",
+          "conda_version": "0.9.2"
+        },
+        {
+          "name": "pip",
+          "python_metadata_version": "26.1.1",
+          "conda_version": "26.1.1"
+        }
+      ]
+    }
+  },
+  "conda_prefix": "/home/azureuser/anaconda3/envs/aevolve",
+  "source_root": "/home/azureuser/zj/a-evolve-new7/a-evolve-new",
+  "harbor_root": "/home/azureuser/zj/harbor",
+  "notes": [
+    "Conda YAML omits variables and pip subsection; restore pip lock and source packages separately.",
+    "venvs are recreated; copying .venv to a different path is not supported.",
+    "Conda explicit is platform-specific.",
+    "Local and editable dependencies must be restored from their source trees."
+  ]
+}

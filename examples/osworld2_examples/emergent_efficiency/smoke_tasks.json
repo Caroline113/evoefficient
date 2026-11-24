@@ -1,0 +1,12 @@
+[
+  {
+    "id": "smoke-calendar-note",
+    "domain": "desktop",
+    "instruction": "Dry-run placeholder: create a short calendar note and verify it is visible."
+  },
+  {
+    "id": "smoke-browser-search",
+    "domain": "browser",
+    "instruction": "Dry-run placeholder: open a browser page, inspect it, and finish after verification."
+  }
+]

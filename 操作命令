@@ -1,0 +1,54 @@
+配好了。重点是：**Codex 仍然在本地跑，文件目录是服务器项目，测试/构建通过 SSH 在服务器上跑**。
+
+已经完成的事：
+
+- 本地安装了 `WinFsp` 和 `SSHFS-Win`。
+- 没有在服务器安装 Codex。
+- 服务器项目已挂载到：`E:\codex-work`
+- 已验证 `E:\codex-work` 可以读取、写入，写入会落到服务器路径：
+  `/home/azureuser/zj/a-evolve-new7/a-evolve-new`
+- 创建了 SSHFS 专用密钥：
+  `C:\Users\14125\.ssh\codex_sshfs_rsa`
+  
+  你的原始 `~/.ssh/aliyun_rsa` 没有被修改。
+- 临时测试用的 `Z:` 已卸载，只保留 `E:\codex-work`。
+
+以后启动本地 Codex 用这个：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File E:\evoefficient\codex-remote\start-codex-work.ps1
+```
+
+如果挂载还在，也可以直接：
+
+```powershell
+cd E:\codex-work
+codex
+```
+
+测试/构建走服务器，用这些本地包装脚本：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File E:\evoefficient\codex-remote\remote-make.ps1 test
+powershell -ExecutionPolicy Bypass -File E:\evoefficient\codex-remote\remote-test.ps1
+powershell -ExecutionPolicy Bypass -File E:\evoefficient\codex-remote\remote-lint.ps1
+```
+
+任意服务器命令也可以这样跑：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File E:\evoefficient\codex-remote\remote-run.ps1 python --version
+powershell -ExecutionPolicy Bypass -File E:\evoefficient\codex-remote\remote-run.ps1 make -n test
+```
+
+我验证过 `remote-run` 会进入服务器项目目录执行，`make -n test` 在服务器返回的是：
+
+```text
+pytest tests/ -v
+```
+
+注意：重启电脑或 SSHFS 进程关闭后，重新挂载运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File E:\evoefficient\codex-remote\mount-codex-work.ps1
+```

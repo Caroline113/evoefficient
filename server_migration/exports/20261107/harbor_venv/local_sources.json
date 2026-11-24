@@ -1,0 +1,29 @@
+[
+  {
+    "name": "harbor",
+    "version": "0.24.0",
+    "source_kind": "harbor",
+    "original_path": "/home/azureuser/zj/harbor",
+    "source_subdir": ".",
+    "editable": true,
+    "required_mapping": "harbor"
+  },
+  {
+    "name": "harbor-langsmith",
+    "version": "0.3.1",
+    "source_kind": "harbor",
+    "original_path": "/home/azureuser/zj/harbor/packages/harbor-langsmith",
+    "source_subdir": "packages/harbor-langsmith",
+    "editable": true,
+    "required_mapping": "harbor"
+  },
+  {
+    "name": "harbor-rewardkit",
+    "version": "0.2.4",
+    "source_kind": "harbor",
+    "original_path": "/home/azureuser/zj/harbor/packages/rewardkit",
+    "source_subdir": "packages/rewardkit",
+    "editable": true,
+    "required_mapping": "harbor"
+  }
+]

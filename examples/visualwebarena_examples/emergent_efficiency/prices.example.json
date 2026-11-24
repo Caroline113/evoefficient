@@ -1,0 +1,4 @@
+{
+  "solver": {"currency":"USD","input_per_1m":null,"output_per_1m":null,"cache_read_per_1m":null},
+  "judge": {"currency":"USD","input_per_1m":null,"output_per_1m":null,"cache_read_per_1m":null}
+}

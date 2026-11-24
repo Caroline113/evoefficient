@@ -1,0 +1,6 @@
+codex gpu sync probe
+local_workspace=E:\codex-work
+expected_remote_path=/home/azureuser/zj/a-evolve-new7/a-evolve-new/codex-gpu-sync-probe.txt
+expected_remote_host=superbench-nc48
+created_by=codex
+created_at=2026-10-24T20:36:00+08:00

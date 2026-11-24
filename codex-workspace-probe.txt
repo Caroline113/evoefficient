@@ -1,0 +1,5 @@
+codex workspace edit probe
+created_by=codex
+workspace=E:\codex-work
+observed_host=LAPTOP-IIU5NNGV
+observed_time=2026-10-24T20:28:46.5003754+08:00

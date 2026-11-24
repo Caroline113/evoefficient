@@ -1,0 +1,11 @@
+[
+  {
+    "name": "a-evolve",
+    "version": "0.1.0",
+    "source_kind": "project",
+    "original_path": null,
+    "source_subdir": ".",
+    "editable": false,
+    "required_mapping": "project"
+  }
+]

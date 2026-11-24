@@ -1,0 +1,15 @@
+{
+  "python": "3.11.15",
+  "executable": "/home/azureuser/zj/a-evolve-new7/a-evolve-new/.venv/bin/python",
+  "base_prefix": "/home/azureuser/anaconda3/envs/aevolve",
+  "prefix": "/home/azureuser/zj/a-evolve-new7/a-evolve-new/.venv",
+  "platform": "Linux-5.15.0-1063-azure-x86_64-with-glibc2.35",
+  "machine": "x86_64",
+  "libc": [
+    "glibc",
+    "2.35"
+  ],
+  "package_count": 145,
+  "source_package_count": 1,
+  "conda_managed_build_origins": []
+}

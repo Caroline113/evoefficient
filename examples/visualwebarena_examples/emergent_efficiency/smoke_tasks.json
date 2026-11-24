@@ -1,0 +1,6 @@
+[
+  {"id":"smoke/classifieds-0","intent":"Synthetic classifieds navigation fixture; not a benchmark task.","sites":["classifieds"]},
+  {"id":"smoke/shopping-0","intent":"Synthetic shopping navigation fixture; not a benchmark task.","sites":["shopping"]},
+  {"id":"smoke/reddit-0","intent":"Synthetic forum navigation fixture; not a benchmark task.","sites":["reddit"]},
+  {"id":"smoke/shopping-1","intent":"Synthetic image-goal fixture; not a benchmark task.","sites":["shopping"]}
+]

@@ -1,0 +1,29 @@
+{
+  "date": "2026-11-13",
+  "service_health": {
+    "ok": true,
+    "root": "/mnt/sda/home/zhangj777/zj/evolve/a-evolve-new/logs",
+    "cache": "/mnt/sda/home/zhangj777/zj/evolve/a-evolve-new/.experiment_dashboard_cache",
+    "scan": {
+      "scanning": false,
+      "visited": 0,
+      "runs": 0,
+      "error": null,
+      "last_scan": "2026-11-13T08:36:38.031857+00:00"
+    },
+    "schema_version": 2
+  },
+  "inventory": {
+    "runs": 173,
+    "tasks": 1386,
+    "derived_analyses": 6,
+    "scan_issues": 17
+  },
+  "unit_tests": "10 passed",
+  "javascript_syntax": "passed",
+  "firefox_browser_workflow": "passed",
+  "original_reference_files_checked": 9,
+  "changed_reference_files": [],
+  "generated_model_requests": 0,
+  "experiment_executions": 0
+}

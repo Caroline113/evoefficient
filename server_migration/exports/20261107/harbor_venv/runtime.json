@@ -1,0 +1,15 @@
+{
+  "python": "3.13.17",
+  "executable": "/home/azureuser/zj/harbor/.venv/bin/python",
+  "base_prefix": "/home/azureuser/.local/share/uv/python/cpython-3.13.17-linux-x86_64-gnu",
+  "prefix": "/home/azureuser/zj/harbor/.venv",
+  "platform": "Linux-5.15.0-1063-azure-x86_64-with-glibc2.35",
+  "machine": "x86_64",
+  "libc": [
+    "glibc",
+    "2.35"
+  ],
+  "package_count": 310,
+  "source_package_count": 3,
+  "conda_managed_build_origins": []
+}

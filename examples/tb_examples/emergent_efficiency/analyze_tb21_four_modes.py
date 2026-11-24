@@ -343,18 +343,31 @@ def main() -> int:
         ("Wall time", "wall_time_s", lambda x:f"{x/3600:.2f}h", "wall_time_s_delta_pct"),
     ]
     cohort = {m: ("修复后协议" if evolution.loc[m, "normal_parsed"] > 0 else "旧协议") for m in MODE_ORDER}
+    repaired_modes = [SHORT[m] for m in MODE_ORDER if cohort[m] == "修复后协议"]
+    legacy_modes = [SHORT[m] for m in MODE_ORDER if cohort[m] == "旧协议"]
+    if not repaired_modes:
+        comparability_note = (
+            "四组均来自 proposal/usage 修复前的旧协议，任务、模型和计费口径一致，可以进行同代际横向比较。"
+            "但旧协议未成功解析 normal evolution，且没有记录后来补充的 reflection usage，因此 token/cost 会一致性地轻微低估。"
+        )
+    elif not legacy_modes:
+        comparability_note = "四组均采用修复后协议，任务、模型和 usage 口径一致，可以进行同代际横向比较。"
+    else:
+        comparability_note = (
+            f"本报告混合两个协议代际：修复后协议为 {', '.join(repaired_modes)}；旧协议为 {', '.join(legacy_modes)}。"
+            "成功率可作描述性配对，但跨协议 token/cost 不能完全归因于模式。"
+        )
     best_success = overall.success_rate.idxmax()
     lowest_cost = overall.cost_usd.idxmin()
     lowest_cpp = overall.cost_per_success.idxmin()
-    lines = ["# Terminal-Bench 2.1 最新四模式实验分析报告", "",
+    lines = ["# Terminal-Bench 2.1 四模式选定运行实验分析报告", "",
              "## 1. 运行选择与可比性", "",
-             f"四组均为各模式目录中最新的完整运行，覆盖完全相同的 {len(baseline_tasks)} 个任务；batch size=4、parallel=2，主模型和 evolver 均为 `deepseek:deepseek-v4-flash`。", "",
+             f"本报告按指定目录选择四组完整运行，覆盖完全相同的 {len(baseline_tasks)} 个任务；batch size=4、parallel=2，主模型和 evolver 均为 `deepseek:deepseek-v4-flash`。", "",
              "| 模式 | 运行目录 | 创建时间 | 协议代际 |", "|---|---|---|---|"]
     for mode in MODE_ORDER:
         lines.append(f"| {SHORT[mode]} | `{paths[mode].name}` | {runs[mode]['manifest'].get('created_at','')} | {cohort[mode]} |")
-    lines += ["", "**重要限制：**Normal 与 Cost-aware 是 proposal/usage 修复后的 9月26–27日运行；Category-seeded 与 Predefined 最新完整结果仍来自 9月20日旧协议。"
-              "四组任务和模型相同，因此 verifier 成功率可作描述性配对；但旧协议没有成功解析 normal evolution，且未纳入后来补记的 reflection usage，故跨协议 token/cost 不能完全归因于模式。", "",
-             "相对变化以最新 Normal 为基线；成功率使用百分点（pp），其余指标使用相对百分比。", "",
+    lines += ["", f"**可比性说明：**{comparability_note}", "",
+             "相对变化以本报告选定的 Normal 为基线；成功率使用百分点（pp），其余指标使用相对百分比。", "",
              "## 2. 核心结果", "",
              "| 指标 | Normal | Cost-aware（相对值） | Category-seeded（相对值） | Predefined（相对值） |", "|---|---:|---:|---:|---:|"]
     for label, metric, formatter, delta_col in metric_specs:
@@ -370,9 +383,9 @@ def main() -> int:
     lines += ["", "![总体指标](figures/01_overall_metrics.png)", "", "![成功率与成本](figures/02_success_cost_frontier.png)", "",
               "## 3. 主要发现", "",
               f"- **最高成功率：{SHORT[best_success]}，{int(overall.loc[best_success,'success'])}/{len(baseline_tasks)}（{overall.loc[best_success,'success_rate']*100:.1f}%）**。",
-              f"- **最低记录成本：{SHORT[lowest_cost]}，${overall.loc[lowest_cost,'cost_usd']:.4f}**；最低记录 cost/pass 是 {SHORT[lowest_cpp]}（${overall.loc[lowest_cpp,'cost_per_success']:.4f}）。后者属于旧协议，不能直接解释为模块带来的节省。",
-              f"- 修复后同代际比较中，Cost-aware 相对 Normal 成功率 {overall.loc['cost-aware','success_rate_delta_pp']:+.1f} pp，成本 {overall.loc['cost-aware','cost_usd_delta_pct']:+.1f}%，token {overall.loc['cost-aware','tokens_delta_pct']:+.1f}%，cost/pass {overall.loc['cost-aware','cost_per_success_delta_pct']:+.1f}%。",
-              f"- 最新 Normal 与 Cost-aware 分别为 {int(overall.loc['normal-evolve','success'])}/20 和 {int(overall.loc['cost-aware','success'])}/20；Cost-aware 多通过 1 题，但记录成本高 ${overall.loc['cost-aware','cost_usd']-overall.loc['normal-evolve','cost_usd']:.2f}。",
+              f"- **最低记录成本：{SHORT[lowest_cost]}，${overall.loc[lowest_cost,'cost_usd']:.4f}**；最低记录 cost/pass 是 {SHORT[lowest_cpp]}（${overall.loc[lowest_cpp,'cost_per_success']:.4f}）。",
+              f"- Cost-aware 相对 Normal 成功率 {overall.loc['cost-aware','success_rate_delta_pp']:+.1f} pp，成本 {overall.loc['cost-aware','cost_usd_delta_pct']:+.1f}%，token {overall.loc['cost-aware','tokens_delta_pct']:+.1f}%，cost/pass {overall.loc['cost-aware','cost_per_success_delta_pct']:+.1f}%。",
+              f"- Normal 与 Cost-aware 分别通过 {int(overall.loc['normal-evolve','success'])}/20 和 {int(overall.loc['cost-aware','success'])}/20；后者成功数变化 {int(overall.loc['cost-aware','success']-overall.loc['normal-evolve','success']):+d}，记录成本差 ${overall.loc['cost-aware','cost_usd']-overall.loc['normal-evolve','cost_usd']:+.2f}。",
               "- 成本主要受 cache-read 规模驱动；图中的总 token 不包含 cache-read，因此不能只看非缓存 token 判断成本。", "",
               "## 4. 配对任务结果", "",
               "| 模式 | 相对 Normal 新增通过 | 相对 Normal 丢失通过 | 两者都通过 | 两者都失败 |", "|---|---:|---:|---:|---:|"]
@@ -386,16 +399,16 @@ def main() -> int:
               "## 6. 成本组成与 cache", "", "![成本组成](figures/05_cost_composition.png)", "",
               f"Cache read 分别为 Normal {overall.loc['normal-evolve','cache_read_tokens']/1e6:.2f}M、Cost-aware {overall.loc['cost-aware','cache_read_tokens']/1e6:.2f}M、Category-seeded {overall.loc['category-seeded-cost-aware','cache_read_tokens']/1e6:.2f}M、Predefined {overall.loc['predefined-control','cache_read_tokens']/1e6:.2f}M。成本拆分见 `cost_components.csv`。", "",
               "## 7. 操作行为", "", "![操作行为相对值](figures/06_behavior_relative.png)", "",
-              f"修复后 Cost-aware 的工具调用为 {int(overall.loc['cost-aware','tool_calls'])}，相对最新 Normal {fmt_delta(overall.loc['cost-aware','tool_calls_delta_pct'])}；turns 变化 {fmt_delta(overall.loc['cost-aware','turns_delta_pct'])}，累计 wall time 变化 {fmt_delta(overall.loc['cost-aware','wall_time_s_delta_pct'])}。", "",
+              f"Cost-aware 的工具调用为 {int(overall.loc['cost-aware','tool_calls'])}，相对本报告 Normal {fmt_delta(overall.loc['cost-aware','tool_calls_delta_pct'])}；turns 变化 {fmt_delta(overall.loc['cost-aware','turns_delta_pct'])}，累计 wall time 变化 {fmt_delta(overall.loc['cost-aware','wall_time_s_delta_pct'])}。", "",
               "## 8. 数据质量与解释限制", "",
-              f"- Zero-token 任务：Normal {int(overall.loc['normal-evolve','zero_token_tasks'])}、Cost-aware {int(overall.loc['cost-aware','zero_token_tasks'])}、Category-seeded {int(overall.loc['category-seeded-cost-aware','zero_token_tasks'])}、Predefined {int(overall.loc['predefined-control','zero_token_tasks'])}。Category-seeded 的零 usage 会低估其成本。",
+              f"- Zero-token 任务：Normal {int(overall.loc['normal-evolve','zero_token_tasks'])}、Cost-aware {int(overall.loc['cost-aware','zero_token_tasks'])}、Category-seeded {int(overall.loc['category-seeded-cost-aware','zero_token_tasks'])}、Predefined {int(overall.loc['predefined-control','zero_token_tasks'])}。存在 zero-token 的运行会低估其成本。",
               f"- Usage missing：Normal {int(overall.loc['normal-evolve','usage_missing'])}、Cost-aware {int(overall.loc['cost-aware','usage_missing'])}、Category-seeded {int(overall.loc['category-seeded-cost-aware','usage_missing'])}、Predefined {int(overall.loc['predefined-control','usage_missing'])}。",
-              "- 每种模式只有一次最新 20-task 运行，没有多随机种子重复；1 题即 5 个百分点，差异应视为描述性结果。",
+              "- 每种模式只有一次选定的 20-task 运行，没有多随机种子重复；1 题即 5 个百分点，差异应视为描述性结果。",
               "- wall time 是各任务耗时求和，并非 parallel=2 下的实际端到端时钟时间；适合衡量累计计算负担，不等于用户等待时间。",
-              "- 四组跨越两个协议代际和不同日期；外部 API、网络、容器状态也可能造成波动。", "",
+              "- 四组运行时间不同，外部 API、网络、容器状态也可能造成波动。", "",
               "## 9. 结论与建议", "",
-              "最新结果中 Category-seeded 的记录成功率最高，但它与最新 Normal/Cost-aware 不属于同一协议代际，不能据此给出公平的四模式效率排名。"
-              "可直接比较的修复后结果显示 Cost-aware 比 Normal 多通过 1 题，非缓存 token 略少，但 cache-read 和总成本明显更高。建议优先用当前修复后代码补跑 Category-seeded 与 Predefined，随后四模式各重复至少 3 次，再报告均值、标准差和配对胜负。", "",
+              f"本报告中 {SHORT[best_success]} 的成功率最高，{SHORT[lowest_cost]} 的记录总成本最低，{SHORT[lowest_cpp]} 的每成功任务成本最低。"
+              "这些结论来自单次 20-task 运行，建议用当前修复后代码对四模式各重复至少 3 次，再报告均值、标准差和配对胜负。", "",
               "## 10. 产物索引", "",
               "- `overall_comparison.csv`：总体指标及相对 normal 的变化。",
               "- `per_task_comparison.csv`：逐任务成功、token、cache、cost 和相对变化。",
@@ -412,8 +425,7 @@ def main() -> int:
             f"{int(row.normal_applied)} | {int(row.module_applied)} |"
         )
     lines += ["", "![进化活动](figures/07_evolution_activity.png)", "",
-              "最新 Normal 与 Cost-aware 均已成功解析 16 个 normal-evolution 提案；Cost-aware 实际应用 5 个，而 Normal 实际应用仍为 0。"
-              "Category-seeded 与 Predefined 仍是旧协议结果，normal parsed/applied 均为 0。这验证了四组存在协议代际差异，也是不能直接比较其 token/cost 的主要原因。", "",
+              f"协议活动与运行代际一致：{comparability_note}", "",
               "进化明细见 `evolution_activity.csv`。", ""]
     (out / "REPORT_CN.md").write_text("\n".join(lines), encoding="utf-8")
     print(out.resolve())

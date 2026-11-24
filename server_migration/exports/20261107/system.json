@@ -1,0 +1,6 @@
+{
+  "docker": "Docker version 27.0.3-1, build 7d4bcd863a4c863e650eed02a550dfeb98560b83",
+  "nvidia": "NVIDIA A100 80GB PCIe, 535.161.08\nNVIDIA A100 80GB PCIe, 535.161.08",
+  "uv": "not available in this shell",
+  "git": "git version 2.34.1"
+}

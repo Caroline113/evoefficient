@@ -54,6 +54,7 @@ inspect_evals/
 !/tests/
 /tests/*
 !/tests/test_efficiency_routing.py
+!/tests/test_harbor_usage.py
 !/tests/test_skillbench_setup.py
 !/tests/gepa/
 
